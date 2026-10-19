@@ -17,14 +17,13 @@ if TYPE_CHECKING:
 
 NAMING_RULE = "BKN001"
 IMPORT_RULE = "BKN002"
-DEFAULT_ROOT = Path(__file__).resolve().parents[1] / "src" / "probly"
-BACKEND_WORDS = frozenset({"torch", "jax", "flax", "numpy", "Torch", "Jax", "Flax", "Numpy"})
+DEFAULT_ROOT = Path(__file__).resolve().parents[1] / "src" / "ndlike"
+BACKEND_WORDS = frozenset({"torch", "jax", "numpy", "Torch", "Jax", "Numpy"})
 SEMANTIC_WORDS = frozenset({"from", "to", "is", "has", "supports", "Supports"})
 ALLOWED_PREFIX_WORDS = BACKEND_WORDS | SEMANTIC_WORDS
 IMPORT_PREFIXES = {
-    "torch": ("torch", "transformers", "huggingface", "peft"),
-    "jax": ("jax", "flax"),
-    "flax": ("flax",),
+    "torch": ("torch",),
+    "jax": ("jax",),
 }
 WORD_BOUNDARY = re.compile(r"_+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 NOQA = re.compile(r"#\s*noqa:\s*([A-Z]+\d+\b(?:[\s,]+[A-Z]+\d+\b)*)", re.IGNORECASE)

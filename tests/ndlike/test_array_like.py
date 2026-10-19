@@ -11,7 +11,7 @@ class TestNumpyArrayLikeImplementationFallbacks:
 
     def _make_minimal_subclass(self):
         """Build a minimal concrete subclass that does not override the error paths."""
-        from probly.representation.array_like import NumpyArrayLikeImplementation  # noqa: PLC0415
+        from ndlike.array_like import NumpyArrayLikeImplementation  # noqa: PLC0415
 
         class _Minimal(NumpyArrayLikeImplementation[np.ndarray]):
             @property

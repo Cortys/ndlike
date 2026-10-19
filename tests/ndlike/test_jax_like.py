@@ -13,7 +13,7 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-from probly.representation.jax_functions import (
+from ndlike.jax_functions import (
     handle_jax_function,
     has_jax_function,
     jax_average,
@@ -25,7 +25,7 @@ from probly.representation.jax_functions import (
     jax_sum,
     jax_var,
 )
-from probly.representation.jax_like import (
+from ndlike.jax_like import (
     JaxLike,
     JaxLikeConvertible,
     JaxLikeImplementation,

@@ -12,8 +12,7 @@ pytest.importorskip("jax")
 import jax
 from jax import numpy as jnp
 
-from probly.representation._protected_axis.jax import JaxAxisProtected
-from probly.representation.jax_functions import (
+from ndlike.jax_functions import (
     jax_average,
     jax_concatenate,
     jax_copy,
@@ -26,6 +25,7 @@ from probly.representation.jax_functions import (
     jax_take_along_axis,
     jax_transpose,
 )
+from ndlike.protected_axis.jax import JaxAxisProtected
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,7 +395,7 @@ def test_mixed_numpy_sidecar_index_and_astype() -> None:
 
 def test_to_jax_like_accepts_the_device_keyword() -> None:
     """Regression: ``to_jax_like`` always passes ``device=``, which ``__jax_like__`` rejected."""
-    from probly.representation.jax_like import to_jax_like  # noqa: PLC0415
+    from ndlike.jax_like import to_jax_like  # noqa: PLC0415
 
     x = SingleArray(jnp.arange(6.0).reshape(2, 3))
 

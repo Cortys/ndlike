@@ -9,7 +9,7 @@ wrappers over the ``jax.numpy`` functions probly needs. Call ``jax_reshape(x, ..
 ``jnp.reshape(x, ...)`` so custom objects get a say.
 
 Dispatch duck-types on ``__jax_function__`` being defined on the argument's *type*, so this module
-never imports :mod:`probly.representation.jax_like` and the import graph stays one-way.
+never imports :mod:`ndlike.jax_like` and the import graph stays one-way.
 
 The :func:`jax_function_dispatch` decorator selects operands by parameter name and preserves
 public signatures and documentation. Operator overloads give native operands precise array

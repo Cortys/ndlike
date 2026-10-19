@@ -11,7 +11,7 @@ import pytest
 pytest.importorskip("torch")
 import torch
 
-from probly.representation._protected_axis.torch import TorchAxisProtected
+from ndlike.protected_axis.torch import TorchAxisProtected
 
 
 @dataclass(frozen=True, slots=True)

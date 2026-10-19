@@ -11,21 +11,21 @@ import jax
 from jax import numpy as jnp
 import numpy as np
 
-from probly.representation._protected_axis._common_functions import (
-    batch_shape,
-    protected_shape,
-    value_ndim,
-    value_shape,
-)
-from probly.representation._protected_axis.jax_functions import jax_function
-from probly.representation.jax_functions import (
+from ndlike.jax_functions import (
     jax_conj,
     jax_reshape,
     jax_swapaxes,
     jax_take_along_axis,
 )
-from probly.representation.jax_like import JaxLike, JaxLikeImplementation
-from probly.representation.jax_operators import JaxOperatorsMixin
+from ndlike.jax_like import JaxLike, JaxLikeImplementation
+from ndlike.jax_operators import JaxOperatorsMixin
+from ndlike.protected_axis._common_functions import (
+    batch_shape,
+    protected_shape,
+    value_ndim,
+    value_shape,
+)
+from ndlike.protected_axis.jax_functions import jax_function
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from jax.sharding import Sharding
     from numpy.typing import DTypeLike, NDArray
 
-    from probly.representation.array_like import ToIndices
+    from ndlike.array_like import ToIndices
 
 
 type JaxProtectedValue = JaxLike[Any] | jax.Array | np.ndarray

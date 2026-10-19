@@ -22,12 +22,12 @@ import pytest
 pytest.importorskip("torch")
 import torch
 
-from probly.representation._protected_axis.numpy import NumpyAxisProtected
-from probly.representation._protected_axis.numpy_functions import (
+from ndlike.protected_axis.numpy import NumpyAxisProtected
+from ndlike.protected_axis.numpy_functions import (
     _validate_batch_sync,
     numpy_axis_protected_internals,
 )
-from probly.representation._protected_axis.torch import TorchAxisProtected
+from ndlike.protected_axis.torch import TorchAxisProtected
 
 # ---------------------------------------------------------------------------
 # Abstract subclasses skip validation in __init_subclass__.
@@ -456,7 +456,7 @@ def test_stack_with_only_raw_arrays_falls_through_to_numpy() -> None:
 
 def test_array_function_called_with_no_protected_returns_notimplemented() -> None:
     """Calling ``numpy_function`` directly with no protected inputs returns NotImplemented."""
-    from probly.representation._protected_axis.numpy_functions import numpy_function  # noqa: PLC0415
+    from ndlike.protected_axis.numpy_functions import numpy_function  # noqa: PLC0415
 
     a = np.zeros((2, 3))
     b = np.zeros((2, 3))
@@ -467,7 +467,7 @@ def test_array_function_called_with_no_protected_returns_notimplemented() -> Non
 
 def test_array_function_concatenate_no_protected_returns_notimplemented() -> None:
     """Calling ``numpy_function(np.concatenate)`` with raw arrays returns NotImplemented."""
-    from probly.representation._protected_axis.numpy_functions import numpy_function  # noqa: PLC0415
+    from ndlike.protected_axis.numpy_functions import numpy_function  # noqa: PLC0415
 
     a = np.zeros((2, 3))
     b = np.zeros((1, 3))

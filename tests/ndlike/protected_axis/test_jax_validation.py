@@ -11,7 +11,7 @@ pytest.importorskip("jax")
 import jax
 from jax import numpy as jnp
 
-from probly.representation._protected_axis.jax import (
+from ndlike.protected_axis.jax import (
     JaxAxisProtected,
     _validate_field_ndim,
 )

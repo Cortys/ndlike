@@ -10,20 +10,20 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, overload, override
 import numpy as np
 import torch
 
-from probly.representation._protected_axis._common_functions import (
+from ndlike.protected_axis._common_functions import (
     batch_shape,
     protected_shape,
     value_ndim,
     value_shape,
 )
-from probly.representation._protected_axis.torch_functions import torch_function
-from probly.representation.torch_like import TorchLike, TorchLikeImplementation
+from ndlike.protected_axis.torch_functions import torch_function
+from ndlike.torch_like import TorchLike, TorchLikeImplementation
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
     from types import ModuleType
 
-    from probly.representation.array_like import ToIndices
+    from ndlike.array_like import ToIndices
 
 
 type TorchProtectedValue = TorchLike[Any] | torch.Tensor | np.ndarray

@@ -12,7 +12,7 @@ from typing import Any, overload
 
 import pytest
 
-from probly.representation._protected_axis._common_functions import (
+from ndlike.protected_axis._common_functions import (
     AxisProtectedInternals,
     apply_unary,
     extract_axis_protected_internals,
@@ -159,7 +159,7 @@ def test_generic_type_contracts(tmp_path: Path) -> None:
 
     # Generated method stubs shadow source imports in the default ty configuration.
     # Check these contracts against source, with unused ignores treated as errors.
-    root = Path(__file__).resolve().parents[4]
+    root = Path(__file__).resolve().parents[3]
     config = tmp_path / "ty.toml"
     config.write_text(
         f"[environment]\nroot = ['{root.as_posix()}/src', '{root.as_posix()}']\n"
@@ -169,12 +169,12 @@ def test_generic_type_contracts(tmp_path: Path) -> None:
     probe = tmp_path / "contracts.py"
     probe.write_text(
         """from typing import assert_type
-from probly.representation._protected_axis._common_functions import (
+from ndlike.protected_axis._common_functions import (
     AxisProtectedInternals, ProtectedValueSequenceInternals,
     apply_unary, extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
 )
-from tests.probly.representation.protected_axis.test_common import _Protected, _Value, _Rebuilt, _extract
+from tests.ndlike.protected_axis.test_common import _Protected, _Value, _Rebuilt, _extract
 
 def check(obj: _Protected) -> None:
     internals = extract_axis_protected_internals(obj)

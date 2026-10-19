@@ -17,7 +17,7 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-from probly.representation import jax_functions as jf
+from ndlike import jax_functions as jf
 
 
 class RecordingOverride:
@@ -44,7 +44,7 @@ def _overloaded_identity(x: int | str, /) -> int | str:
 _TYPING_CHECK = """
 from typing import TYPE_CHECKING, assert_type, overload
 import jax
-from probly.representation import jax_functions as jf
+from ndlike import jax_functions as jf
 
 @overload
 def _overloaded_identity(x: int, /) -> int: ...
@@ -108,7 +108,7 @@ def test_operator_signatures_with_ty(tmp_path: Path):
     source.write_text(_TYPING_CHECK)
     # The generated stubs are a partial tree. Check source signatures without
     # letting that tree shadow imports and turn them into Unknown.
-    source_root = Path(__file__).resolve().parents[3] / "src"
+    source_root = Path(__file__).resolve().parents[2] / "src"
     result = subprocess.run(  # noqa: S603
         [
             executable,

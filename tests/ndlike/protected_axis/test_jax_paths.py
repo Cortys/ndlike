@@ -14,8 +14,8 @@ pytest.importorskip("jax")
 import jax
 from jax import numpy as jnp
 
-from probly.representation._protected_axis.jax import JaxAxisProtected
-from probly.representation._protected_axis.jax_functions import (
+from ndlike.protected_axis.jax import JaxAxisProtected
+from ndlike.protected_axis.jax_functions import (
     ProtectedValueSequenceInternals,
     _validate_batch_sync,
     jax_axis_protected_internals,
@@ -25,8 +25,8 @@ from probly.representation._protected_axis.jax_functions import (
 )
 
 if TYPE_CHECKING:
-    from probly.representation.array_like import ToIndices
-from probly.representation.jax_functions import (
+    from ndlike.array_like import ToIndices
+from ndlike.jax_functions import (
     jax_add,
     jax_astype,
     jax_average,
@@ -1091,7 +1091,7 @@ def test_concatenate_rejects_sequence_with_template_but_no_protected_values(
     fake_sequence = ProtectedValueSequenceInternals(False, internals, {"array": [x.array, x.array]})
 
     monkeypatch.setattr(
-        "probly.representation._protected_axis.jax_functions._extract_protected_value_sequence_internals",
+        "ndlike.protected_axis.jax_functions._extract_protected_value_sequence_internals",
         lambda *_args, **_kwargs: fake_sequence,
     )
 
@@ -1110,7 +1110,7 @@ def test_stack_rejects_sequence_with_template_but_no_protected_values(monkeypatc
     fake_sequence = ProtectedValueSequenceInternals(False, internals, {"array": [x.array, x.array]})
 
     monkeypatch.setattr(
-        "probly.representation._protected_axis.jax_functions._extract_protected_value_sequence_internals",
+        "ndlike.protected_axis.jax_functions._extract_protected_value_sequence_internals",
         lambda *_args, **_kwargs: fake_sequence,
     )
 

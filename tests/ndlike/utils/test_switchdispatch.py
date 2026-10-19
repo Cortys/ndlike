@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from probly.utils.switchdispatch import switch, switchdispatch
+from ndlike._switchdispatch import switch, switchdispatch
 
 
 class Base:
@@ -78,7 +78,7 @@ def test_function_registration_preserves_callable_object():
 _TYPING_CHECK = """
 from typing import assert_type, overload
 
-from probly.utils.switchdispatch import switch, switchdispatch
+from ndlike._switchdispatch import switch, switchdispatch
 
 class Base: ...
 class Derived(Base): ...

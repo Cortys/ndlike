@@ -9,7 +9,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast, overload, 
 
 import numpy as np
 
-from probly.representation._protected_axis._common_functions import (
+from ndlike.array_like import (
+    ArrayFlagsLike,
+    NumpyArrayLike,
+    NumpyArrayLikeImplementation,
+    Order,
+    ToIndices,
+)
+from ndlike.protected_axis._common_functions import (
     batch_shape,
     normalize_axes,
     normalize_axis,
@@ -17,14 +24,7 @@ from probly.representation._protected_axis._common_functions import (
     value_ndim,
     value_shape,
 )
-from probly.representation._protected_axis.numpy_functions import numpy_function
-from probly.representation.array_like import (
-    ArrayFlagsLike,
-    NumpyArrayLike,
-    NumpyArrayLikeImplementation,
-    Order,
-    ToIndices,
-)
+from ndlike.protected_axis.numpy_functions import numpy_function
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping

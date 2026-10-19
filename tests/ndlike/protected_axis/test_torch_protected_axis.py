@@ -11,8 +11,8 @@ import pytest
 pytest.importorskip("torch")
 import torch
 
-from probly.representation._protected_axis.torch import TorchAxisProtected
-from probly.representation.torch_functions import torch_average
+from ndlike.protected_axis.torch import TorchAxisProtected
+from ndlike.torch_functions import torch_average
 
 
 @dataclass(frozen=True, slots=True)

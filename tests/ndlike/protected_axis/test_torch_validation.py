@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("torch")
 import torch
 
-from probly.representation._protected_axis.torch import (
+from ndlike.protected_axis.torch import (
     TorchAxisProtected,
     _validate_field_ndim,
 )

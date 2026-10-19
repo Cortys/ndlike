@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_backend_naming.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "check_backend_naming.py"
 _spec = importlib.util.spec_from_file_location("check_backend_naming", SCRIPT)
 assert _spec is not None
 assert _spec.loader is not None
@@ -17,7 +17,7 @@ checker = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(checker)
 
 
-@pytest.mark.parametrize("backend", ["torch", "jax", "flax", "numpy", "Torch", "Jax", "Flax", "Numpy"])
+@pytest.mark.parametrize("backend", ["torch", "jax", "numpy", "Torch", "Jax", "Numpy"])
 def test_backend_prefixes_and_suffixes(backend: str) -> None:
     assert checker.misplaced_backend(f"{backend}_predict") is None
     assert checker.misplaced_backend(f"_{backend}_predict") is None
@@ -31,22 +31,22 @@ def test_backend_prefixes_and_suffixes(backend: str) -> None:
         "predict",
         "_",
         "JaxSample",
-        "_FlaxPredictor",
+        "_JaxPredictor",
         "numpyArray",
         "TorchHTTPModel",
         "torch_numpy_predict",
         "_jax_to_torch",
         "TorchNumpyAdapter",
-        "_NumpyJaxTorchFlaxAdapter",
+        "_NumpyJaxTorchJaxAdapter",
         "torch_torch",
         "fromNumpySample",
         "toTorchLike",
         "isJaxCompatible",
         "hasNumpyValue",
         "supportsTorch",
-        "use_flaxify",
+        "use_jaxify",
         "convert_pytorch",
-        "MyFlaxifyModel",
+        "MyJaxifyModel",
         "PytorchModel",
         "mytorchModel",
         "foo_torched",
@@ -69,11 +69,11 @@ def test_word_boundaries_accept_prefixes_and_substrings(name: str) -> None:
         ("_BoundNumpyFunction", "Numpy"),
         ("PyTorchModel", "Torch"),
         ("myJax", "Jax"),
-        ("HTTPFlaxAdapter", "Flax"),
+        ("HTTPJaxAdapter", "Jax"),
         ("Model2TorchLayer", "Torch"),
         ("uses__numpy__arrays", "numpy"),
         ("__torch_predict", "torch"),
-        ("_flaxify_torch", "torch"),
+        ("_jaxify_torch", "torch"),
         ("pytorch_numpy_predict", "numpy"),
         ("SupportingTorch", "Torch"),
         ("SupportsomethingTorch", "Torch"),
@@ -107,14 +107,14 @@ try:
         pass
 except ImportError:
     pass
-type MyFlaxAlias[T] = list[T]
+type MyJaxAlias[T] = list[T]
 """
     assert checker.check_source(source, "example.py") == [
         "example.py:1:1: BKN001 Backend word 'Torch' requires an allowed prefix in 'MyTorchModel'",
         "example.py:2:5: BKN001 Backend word 'numpy' requires an allowed prefix in 'predict_numpy'",
         "example.py:3:9: BKN001 Backend word 'jax' requires an allowed prefix in 'predict_jax'",
         "example.py:7:5: BKN001 Backend word 'torch' requires an allowed prefix in '_compute_accuracy_torch'",
-        "example.py:11:1: BKN001 Backend word 'Flax' requires an allowed prefix in 'MyFlaxAlias'",
+        "example.py:11:1: BKN001 Backend word 'Jax' requires an allowed prefix in 'MyJaxAlias'",
     ]
 
 
@@ -140,7 +140,7 @@ def test_dunder_protocol_methods_and_conversion_methods_are_exempt() -> None:
     def _to_torch_like(self): pass
     def is_jax_compatible(self): pass
     def has_numpy_protected_value(self): pass
-    def supports_flax(self): pass
+    def supports_jax(self): pass
 class SupportsJaxFunction: pass
 type TorchNumpyAlias = int
 """
@@ -162,7 +162,7 @@ def test_explicit_suppression_on_opening_line(comment: str) -> None:
 ):
     pass
 class MyTorchModel: pass  {comment}
-type MyFlaxAlias = int  {comment}
+type MyJaxAlias = int  {comment}
 """
     assert checker.check_source(source, "example.py") == []
 
@@ -204,7 +204,7 @@ type __TorchAlias__ = int
 
 
 def test_cli_default_scope_is_only_the_library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    library = tmp_path / "src" / "probly"
+    library = tmp_path / "src" / "ndlike"
     library.mkdir(parents=True)
     (library / "model.py").write_text("class TorchModel: pass\n")
     (tmp_path / "src" / "benchmark.py").write_text("class MyTorchModel: pass\n")
@@ -255,16 +255,14 @@ def test_standalone_entry_point(tmp_path: Path, name: str, returncode: int) -> N
         ("torch.py", "import torch"),
         ("torch_metrics.py", "from torch.nn import Module"),
         ("_torch_helpers.py", "import torch.nn.functional as F"),
-        ("transformers.py", "import torch"),
-        ("transformers_utils.py", "from torch import Tensor"),
-        ("huggingface.py", "import torch"),
-        ("peft_helpers.py", "import torch"),
+        ("torch_utils.py", "from torch import Tensor"),
+        ("torch_helpers.py", "import torch"),
         ("jax.py", "import jax.numpy as jnp"),
         ("_jax_functions.py", "from jax import Array"),
-        ("flax.py", "import jax, flax"),
-        ("flax_layers.py", "from flax.nnx import Module"),
-        ("probly/torch/__init__.py", "import torch"),
-        ("probly/_flax_helpers/__init__.py", "import flax, jax"),
+        ("jax.py", "import jax"),
+        ("jax_layers.py", "from jax import Array"),
+        ("ndlike/torch/__init__.py", "import torch"),
+        ("ndlike/_jax_helpers/__init__.py", "import jax"),
     ],
 )
 def test_imports_in_approved_modules(filename: str, source: str) -> None:
@@ -276,20 +274,17 @@ def test_imports_in_approved_modules(filename: str, source: str) -> None:
     [
         ("numpy.py", "import torch", "torch"),
         ("torch.py", "import jax", "jax"),
-        ("jax.py", "import flax", "flax"),
-        ("flax.py", "import torch", "torch"),
-        ("transformers.py", "import flax", "flax"),
-        ("huggingface.py", "import jax", "jax"),
-        ("peft.py", "import flax", "flax"),
+        ("common.py", "import jax", "jax"),
+        ("jax.py", "import torch", "torch"),
         ("my_torch.py", "from torch.nn import Module", "torch"),
         ("pytorch.py", "import torch", "torch"),
         ("torchvision.py", "import torch", "torch"),
-        ("flaxify.py", "import flax", "flax"),
+        ("jaxify.py", "import jax", "jax"),
         ("__torch_helpers.py", "import torch", "torch"),
-        ("probly/torch/shared.py", "import torch", "torch"),
-        ("probly/common/__init__.py", "import torch", "torch"),
+        ("ndlike/torch/shared.py", "import torch", "torch"),
+        ("ndlike/common/__init__.py", "import torch", "torch"),
         ("jax.py", "import torch as jax", "torch"),
-        ("common.py", "from flax.nnx import Module as TorchModule", "flax"),
+        ("common.py", "from jax import Array as TorchModule", "jax"),
     ],
 )
 def test_imports_in_unapproved_modules(filename: str, source: str, backend: str) -> None:
@@ -305,7 +300,7 @@ from torch_tools import helper
 from . import torch
 from .torch import helper
 from ..jax import helper
-from probly.layers.torch import Layer
+from ndlike.layers.torch import Layer
 """
     diagnostics = checker.check_source(source, "common.py")
     assert len(diagnostics) == 2
@@ -320,7 +315,7 @@ def test_runtime_imports_inside_functions_classes_and_try_blocks() -> None:
         from jax import Array
 class Model:
     try:
-        import flax
+        import jax
     except ImportError:
         pass
 """
@@ -346,7 +341,7 @@ def test_type_only_branches_are_exempt_but_runtime_branches_are_checked(
     imports: str, guard: str, negated: bool
 ) -> None:
     condition = f"not {guard}" if negated else guard
-    type_only = "import torch, jax, flax"
+    type_only = "import torch, jax"
     runtime = "import torch"
     body, otherwise = (runtime, type_only) if negated else (type_only, runtime)
     source = f"{imports}\nif {condition}:\n    {body}\nelse:\n    {otherwise}\n"
@@ -419,7 +414,7 @@ def test_import_suppression_uses_the_opening_line_and_only_its_rule() -> None:
 )
 def bad_jax(): pass  # noqa: BKN002
 import jax  # noqa: BKN001
-import flax  # noqa: BKN001, BKN002
+import jax  # noqa: BKN001, BKN002
 """
     diagnostics = checker.check_source(source, "common.py")
     assert len(diagnostics) == 2
@@ -438,11 +433,11 @@ def test_import_strings_and_comments_do_not_count_as_imports_or_suppressions() -
     source = '''"import torch"
 # from jax import Array
 """# noqa: BKN002"""
-import flax
+import jax
 '''
     diagnostics = checker.check_source(source, "common.py")
     assert len(diagnostics) == 1
-    assert diagnostics[0].startswith("common.py:4:1: BKN002 Import of 'flax'")
+    assert diagnostics[0].startswith("common.py:4:1: BKN002 Import of 'jax'")
 
 
 def test_cli_reports_backend_import_violations(tmp_path: Path) -> None:

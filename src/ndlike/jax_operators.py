@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from probly.representation import jax_functions as jf
+from ndlike import jax_functions as jf
 
 if TYPE_CHECKING:
     from collections.abc import Callable

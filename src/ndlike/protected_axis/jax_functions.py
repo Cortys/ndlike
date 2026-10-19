@@ -8,8 +8,30 @@ import jax
 from jax import numpy as jnp
 import numpy as np
 
-from probly.representation import jax_functions as jf
-from probly.representation._protected_axis._common_functions import (
+from ndlike import jax_functions as jf
+from ndlike._switchdispatch import switchdispatch
+from ndlike.jax_functions import (
+    jax_astype,
+    jax_average,
+    jax_concatenate,
+    jax_conj,
+    jax_copy,
+    jax_expand_dims,
+    jax_matrix_transpose,
+    jax_mean,
+    jax_moveaxis,
+    jax_reshape,
+    jax_squeeze,
+    jax_stack,
+    jax_std,
+    jax_sum,
+    jax_swapaxes,
+    jax_take_along_axis,
+    jax_transpose,
+    jax_var,
+)
+from ndlike.jax_like import JaxLike
+from ndlike.protected_axis._common_functions import (
     AxisProtectedCreator,
     AxisProtectedInternals,
     BoundFunctionWithInternals,
@@ -32,28 +54,6 @@ from probly.representation._protected_axis._common_functions import (
     value_ndim,
     value_shape,
 )
-from probly.representation.jax_functions import (
-    jax_astype,
-    jax_average,
-    jax_concatenate,
-    jax_conj,
-    jax_copy,
-    jax_expand_dims,
-    jax_matrix_transpose,
-    jax_mean,
-    jax_moveaxis,
-    jax_reshape,
-    jax_squeeze,
-    jax_stack,
-    jax_std,
-    jax_sum,
-    jax_swapaxes,
-    jax_take_along_axis,
-    jax_transpose,
-    jax_var,
-)
-from probly.representation.jax_like import JaxLike
-from probly.utils import switchdispatch
 
 if TYPE_CHECKING:
     from collections.abc import Callable

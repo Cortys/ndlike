@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, overload
 import numpy as np
 import torch
 
-from probly.representation._protected_axis._common_functions import (
+from ndlike._switchdispatch import switchdispatch
+from ndlike.protected_axis._common_functions import (
     AxisProtectedCreator,
     AxisProtectedInternals,
     FunctionOverride as _TorchFunction,
@@ -29,9 +30,8 @@ from probly.representation._protected_axis._common_functions import (
     value_ndim,
     value_shape,
 )
-from probly.representation.torch_functions import torch_average
-from probly.representation.torch_like import TorchLike
-from probly.utils import switchdispatch
+from ndlike.torch_functions import torch_average
+from ndlike.torch_like import TorchLike
 
 if TYPE_CHECKING:
     from collections.abc import Callable

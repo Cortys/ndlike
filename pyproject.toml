@@ -1,0 +1,174 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ndlike"
+version = "0.1.0"
+description = "A toolkit for defining custom array types on top of NumPy, JAX, and PyTorch."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = ["numpy>=2.1.0", "flextype>=0.2.0"]
+authors = [{ name = "Clemens Damke", email = "clemens@cortys.de" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.6.0"]
+jax = ["jax>=0.8.1"]
+
+[project.urls]
+source = "https://github.com/Cortys/ndlike"
+tracker = "https://github.com/Cortys/ndlike/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ndlike", "ndlike.*"]
+
+[tool.setuptools.package-data]
+ndlike = ["py.typed"]
+
+[dependency-groups]
+lint = ["ruff>=0.17.1", "ty>=0.0.89"]
+test = ["pytest>=8.0"]
+dev = [
+    { include-group = "lint" },
+    { include-group = "test" },
+    "prek>=0.5.6",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+output-format = "full"
+
+[tool.ruff.lint]
+select = ["ALL"]
+external = ["BKN001", "BKN002"]
+ignore = ["COM812", "CPY001", "FBT", "FIX002", "N812", "PLR0913", "PLR0917", "PLR2004", "RET504"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "ANN001", "ANN201", "ANN202", "C901", "D100", "D101", "D102", "D103", "D404",
+    "FBT001", "INP001", "N803", "PD901", "PLR2004", "S101", "TCH",
+]
+"__init__.py" = ["I002", "PLC0414"]
+# Previously private modules retain their original documentation during extraction.
+"src/ndlike/protected_axis/*.py" = ["D102", "D103", "D104", "D105"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.isort]
+known-first-party = ["ndlike"]
+force-sort-within-sections = true
+combine-as-imports = true
+force-single-line = false
+no-lines-before = ["future"]
+required-imports = ["from __future__ import annotations"]
+extra-standard-library = ["typing_extensions"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/ndlike"]
+minversion = "8.0"
+pythonpath = ["src"]
+addopts = ["--import-mode=importlib"]
+
+[tool.ty.src]
+include = ["src/ndlike", "tests/ndlike", "scripts"]
+
+[[tool.ty.overrides]]
+include = ["tests/ndlike/**"]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+
+# Migration baseline: runtime override/negative tests deliberately exercise calls
+# outside upstream backend annotations. Dedicated subprocess typing probes remain
+# strict and are executed by pytest; do not widen these exceptions to library code.
+[[tool.ty.overrides]]
+include = [
+    "tests/ndlike/protected_axis/test_jax_operators.py",
+    "tests/ndlike/protected_axis/test_jax_paths.py",
+    "tests/ndlike/protected_axis/test_jax_protected_axis.py",
+    "tests/ndlike/protected_axis/test_numpy_functions.py",
+    "tests/ndlike/protected_axis/test_torch_paths.py",
+    "tests/ndlike/protected_axis/test_torch_protected_axis.py",
+    "tests/ndlike/test_jax_functions.py",
+    "tests/ndlike/test_jax_like.py",
+]
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"
+
+[[tool.ty.overrides]]
+include = [
+    "tests/ndlike/protected_axis/test_numpy_functions.py",
+    "tests/ndlike/protected_axis/test_numpy_indexing_ufunc.py",
+    "tests/ndlike/protected_axis/test_remaining_paths.py",
+    "tests/ndlike/protected_axis/test_torch_protected_axis.py",
+    "tests/ndlike/test_jax_functions.py",
+]
+[tool.ty.overrides.rules]
+no-matching-overload = "ignore"
+
+[[tool.ty.overrides]]
+include = ["tests/ndlike/protected_axis/test_jax_operators.py"]
+[tool.ty.overrides.rules]
+invalid-assignment = "ignore"
+
+[[tool.ty.overrides]]
+include = [
+    "tests/ndlike/protected_axis/test_jax_paths.py",
+    "tests/ndlike/protected_axis/test_jax_protected_axis.py",
+    "tests/ndlike/test_jax_like.py",
+]
+[tool.ty.overrides.rules]
+unresolved-attribute = "ignore"
+
+[[tool.ty.overrides]]
+include = ["tests/ndlike/test_array_like.py", "tests/ndlike/test_jax_like.py"]
+[tool.ty.overrides.rules]
+call-non-callable = "ignore"
+
+[[tool.ty.overrides]]
+include = [
+    "tests/ndlike/protected_axis/test_jax_paths.py",
+    "tests/ndlike/protected_axis/test_numpy_functions.py",
+    "tests/ndlike/protected_axis/test_remaining_paths.py",
+]
+[tool.ty.overrides.rules]
+unused-ignore-comment = "ignore"
+
+# Existing Torch protocol differences and changed diagnostic IDs in newer stubs.
+# Keep the extracted source unchanged; these two files need a later typing cleanup.
+[[tool.ty.overrides]]
+include = ["src/ndlike/torch_like.py", "src/ndlike/protected_axis/torch.py"]
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"
+invalid-return-type = "ignore"
+unused-ignore-comment = "ignore"
+
+[[tool.ty.overrides]]
+include = ["src/ndlike/torch_like.py"]
+[tool.ty.overrides.rules]
+invalid-property-type-override = "ignore"
+
+# Use small CPU wheels in development and CI; installed users choose their own index.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform != 'darwin'" }]

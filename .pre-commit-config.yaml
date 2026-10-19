@@ -1,0 +1,30 @@
+repos:
+  - repo: local
+    hooks:
+      - id: uv-lock
+        name: uv lock
+        entry: uv lock --check
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
+      - id: ruff-check
+        name: ruff check
+        entry: uv run --locked --group lint ruff check --fix --exit-non-zero-on-fix --no-cache
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --locked --group lint ruff format
+        language: system
+        types_or: [python, pyi]
+      - id: backend-naming
+        name: backend naming and imports (BKN001, BKN002)
+        entry: uv run --locked python scripts/check_backend_naming.py
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: ty-check
+        name: ty check
+        entry: uv run --locked --all-extras --group lint ty check
+        language: system
+        pass_filenames: false

@@ -9,7 +9,7 @@ from flextype import flexdispatch
 import numpy as np
 import torch
 
-from probly.representation.array_like import ArrayLike
+from ndlike.array_like import ArrayLike
 
 if TYPE_CHECKING:
     from collections.abc import Callable

@@ -6,7 +6,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
-from probly.representation._protected_axis._common_functions import (
+from ndlike._switchdispatch import switchdispatch
+from ndlike.array_like import NumpyArrayLike
+from ndlike.protected_axis._common_functions import (
     AxisProtectedCreator,
     AxisProtectedInternals,
     BoundFunctionWithInternals,
@@ -27,8 +29,6 @@ from probly.representation._protected_axis._common_functions import (
     value_ndim,
     value_shape,
 )
-from probly.representation.array_like import NumpyArrayLike
-from probly.utils import switchdispatch
 
 if TYPE_CHECKING:
     from collections.abc import Callable

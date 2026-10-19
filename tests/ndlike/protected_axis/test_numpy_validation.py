@@ -8,7 +8,7 @@ from typing import Any, ClassVar
 import numpy as np
 import pytest
 
-from probly.representation._protected_axis.numpy import (
+from ndlike.protected_axis.numpy import (
     NumpyAxisProtected,
     _validate_field_ndim,
 )

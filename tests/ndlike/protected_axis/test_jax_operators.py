@@ -14,8 +14,8 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-from probly.representation import jax_functions as jf
-from probly.representation._protected_axis.jax import JaxAxisProtected
+from ndlike import jax_functions as jf
+from ndlike.protected_axis.jax import JaxAxisProtected
 
 _BINARY = [
     (operator.add, jf.jax_add, jnp.add),

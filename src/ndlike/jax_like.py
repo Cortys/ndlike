@@ -2,7 +2,7 @@
 """Protocols and base classes for JAX-like array objects.
 
 The concrete methods below are written in terms of the wrappers in
-:mod:`probly.representation.jax_functions`, so subclasses only have to implement
+:mod:`ndlike.jax_functions`, so subclasses only have to implement
 ``__jax_function__``.
 """
 
@@ -20,8 +20,8 @@ import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 import numpy as np
 
-from probly.representation.array_like import ArrayLike
-from probly.representation.jax_functions import (
+from ndlike.array_like import ArrayLike
+from ndlike.jax_functions import (
     handle_jax_function,
     has_jax_function,
     jax_astype,
@@ -120,7 +120,7 @@ class JaxLikeImplementation[DT](ArrayLike[DT], ABC):
 
     Subclasses only have to implement ``__jax_function__`` plus the few members that cannot be
     expressed generically. Every concrete method below routes through the wrappers in
-    :mod:`probly.representation.jax_functions` and thus back into ``__jax_function__``.
+    :mod:`ndlike.jax_functions` and thus back into ``__jax_function__``.
 
     Concrete (non-abstract) subclasses are additionally registered as JAX pytree nodes, which makes
     ``jax.jit``, ``jax.vmap``, ``jax.grad`` and ``jax.tree`` work on them. This does not replace the
@@ -210,7 +210,7 @@ class JaxLikeImplementation[DT](ArrayLike[DT], ABC):
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
     ) -> Any:  # noqa: ANN401
-        """Handle a call to one of the wrappers in :mod:`probly.representation.jax_functions`.
+        """Handle a call to one of the wrappers in :mod:`ndlike.jax_functions`.
 
         Args:
             func: The wrapper function that was called.

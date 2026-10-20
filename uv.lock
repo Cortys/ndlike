@@ -3,10 +3,10 @@ revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform != 'darwin'",
-    "python_full_version == '3.13.*' and sys_platform != 'darwin'",
-    "python_full_version < '3.13' and sys_platform != 'darwin'",
     "python_full_version >= '3.14' and sys_platform == 'darwin'",
+    "python_full_version == '3.13.*' and sys_platform != 'darwin'",
     "python_full_version == '3.13.*' and sys_platform == 'darwin'",
+    "python_full_version < '3.13' and sys_platform != 'darwin'",
     "python_full_version < '3.13' and sys_platform == 'darwin'",
 ]
 
@@ -307,6 +307,7 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
     { name = "ty" },
+    { name = "typing-extensions" },
 ]
 lint = [
     { name = "ruff" },
@@ -314,6 +315,7 @@ lint = [
 ]
 test = [
     { name = "pytest" },
+    { name = "typing-extensions" },
 ]
 
 [package.metadata]
@@ -332,12 +334,16 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.17.1" },
     { name = "ty", specifier = ">=0.0.89" },
+    { name = "typing-extensions", specifier = ">=4.7.0" },
 ]
 lint = [
     { name = "ruff", specifier = ">=0.17.1" },
     { name = "ty", specifier = ">=0.0.89" },
 ]
-test = [{ name = "pytest", specifier = ">=8.0" }]
+test = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "typing-extensions", specifier = ">=4.7.0" },
+]
 
 [[package]]
 name = "networkx"

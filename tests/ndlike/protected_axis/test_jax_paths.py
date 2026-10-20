@@ -138,6 +138,7 @@ def test_jax_protected_values_no_args_returns_all_value() -> None:
     x = _SingleArray(jnp.arange(6.0).reshape(2, 3))
     values = x.protected_values()
     assert "array" in values
+    assert isinstance(values["array"], jax.Array)
     assert jnp.allclose(values["array"], x.array)
 
 
@@ -178,7 +179,7 @@ def test_len_raises_for_zero_dim_distribution() -> None:
     assert x.shape == ()
     assert x.ndim == 0
 
-    with pytest.raises(TypeError, match="unsized distribution"):
+    with pytest.raises(TypeError, match="unsized object"):
         _ = len(x)
 
 
@@ -494,6 +495,7 @@ def test_at_set_accepts_bare_value_for_single_field() -> None:
 
     y = x.at[1].set(jnp.arange(4.0))
 
+    assert isinstance(y, _SingleArray)
     assert jnp.allclose(y.array[1], jnp.arange(4.0))
     assert jnp.allclose(y.array[0], jnp.zeros(4))
 
@@ -518,6 +520,7 @@ def test_at_set_unwraps_zero_dim_object_array() -> None:
 
     y = x.at[0].set(x[1])
 
+    assert isinstance(y, _MixedBatchArrayNumpy)
     assert y.sidecar[0] == "b"
     assert not isinstance(y.sidecar[0], np.ndarray)
     assert float(y.array[0]) == 2.0
@@ -641,7 +644,7 @@ def test_take_along_axis_rejects_non_array_indices() -> None:
     x = _SingleArray(jnp.arange(6.0).reshape(2, 3))
 
     with pytest.raises(TypeError, match="no implementation found"):
-        _ = jax_take_along_axis(x, [0, 1], axis=0)
+        jax_take_along_axis(x, [0, 1], axis=0)  # ty: ignore[invalid-argument-type]
 
 
 def test_average_skips_weight_expansion_for_unprotected_axes() -> None:
@@ -681,7 +684,7 @@ def test_reshape_rejects_missing_shape() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="no implementation found"):
-        _ = jax_reshape(x, shape=None)
+        jax_reshape(x, shape=None)  # ty: ignore[no-matching-overload]
 
 
 def test_reshape_accepts_bare_int_shape() -> None:
@@ -708,7 +711,7 @@ def test_jax_like_converts_dtype() -> None:
     """``__jax_like__`` delegates to ``astype``."""
     x = _SingleArray(jnp.ones((2, 3), dtype=jnp.float32))
 
-    y = x.__jax_like__(jnp.float16)
+    y = x.__jax_like__(jnp.dtype(jnp.float16))
 
     assert isinstance(y, _SingleArray)
     assert y.array.dtype == jnp.float16
@@ -751,7 +754,7 @@ def test_concatenate_rejects_non_int_axis() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="concatenate axis must be an int or None"):
-        _ = jax_concatenate((x, x), axis="0")
+        jax_concatenate((x, x), axis="0")  # ty: ignore[invalid-argument-type]
 
 
 def test_stack_rejects_non_int_axis() -> None:
@@ -759,7 +762,7 @@ def test_stack_rejects_non_int_axis() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="stack axis must be an int"):
-        _ = jax_stack((x, x), axis=None)
+        jax_stack((x, x), axis=None)  # ty: ignore[invalid-argument-type]
 
 
 def test_sequence_ops_reject_mismatched_protected_axes() -> None:
@@ -787,7 +790,7 @@ def test_reshape_rejects_non_shape_argument() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="reshape shape must be an int, tuple or list"):
-        _ = jax_reshape(x, "bad")
+        jax_reshape(x, "bad")  # ty: ignore[no-matching-overload]
 
 
 def test_expand_dims_rejects_non_int_axis() -> None:
@@ -795,7 +798,7 @@ def test_expand_dims_rejects_non_int_axis() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="expand_dims axis must be an int"):
-        _ = jax_expand_dims(x, axis="0")
+        jax_expand_dims(x, axis="0")  # ty: ignore[invalid-argument-type]
 
 
 def test_squeeze_rejects_non_int_axis() -> None:
@@ -803,7 +806,7 @@ def test_squeeze_rejects_non_int_axis() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="squeeze axis must be an int"):
-        _ = jax_squeeze(x, axis="0")
+        jax_squeeze(x, axis="0")  # ty: ignore[invalid-argument-type]
 
 
 def test_squeeze_accepts_tuple_axis() -> None:
@@ -821,7 +824,7 @@ def test_swapaxes_rejects_non_int_axis() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="swapaxes axis values must be integers"):
-        _ = jax_swapaxes(x, "0", 1)
+        jax_swapaxes(x, "0", 1)  # ty: ignore[invalid-argument-type]
 
 
 def test_moveaxis_rejects_non_int_source() -> None:
@@ -829,7 +832,7 @@ def test_moveaxis_rejects_non_int_source() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="moveaxis source must be an int"):
-        _ = jax_moveaxis(x, "0", 1)
+        jax_moveaxis(x, "0", 1)  # ty: ignore[invalid-argument-type]
 
 
 def test_moveaxis_rejects_non_int_destination() -> None:
@@ -837,7 +840,7 @@ def test_moveaxis_rejects_non_int_destination() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="moveaxis destination must be an int"):
-        _ = jax_moveaxis(x, 0, "1")
+        jax_moveaxis(x, 0, "1")  # ty: ignore[invalid-argument-type]
 
 
 def test_transpose_rejects_axes_of_wrong_length() -> None:
@@ -853,7 +856,7 @@ def test_transpose_rejects_non_int_axes() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="transpose axes must be a tuple/list of integers"):
-        _ = jax_transpose(x, axes=("0", "1"))
+        jax_transpose(x, axes=("0", "1"))  # ty: ignore[invalid-argument-type]
 
 
 def test_subclassing_a_concrete_protected_class_is_rejected() -> None:
@@ -868,7 +871,9 @@ def test_subclassing_a_concrete_protected_class_is_rejected() -> None:
 def test_jax_sharding() -> None:
     """Test sharding property."""
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
-    assert x.sharding == x.protected_value().sharding
+    value = x.protected_value()
+    assert isinstance(value, jax.Array)
+    assert x.sharding == value.sharding
     assert isinstance(x.sharding, jax.sharding.Sharding)
     assert x.devices() == {jax.devices()[0]}
 

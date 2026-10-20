@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast, overload, 
 import numpy as np
 
 from ndlike.array_like import (
+    ArrayAPIVersion,
     ArrayFlagsLike,
     NumpyArrayLike,
     NumpyArrayLikeImplementation,
@@ -203,7 +204,7 @@ class NumpyAxisProtected[T: NumpyArrayLike | np.ndarray](NumpyArrayLikeImplement
     @override
     def __len__(self) -> int:
         if self.ndim == 0:
-            msg = "len() of unsized representation"
+            msg = "len() of unsized object"
             raise TypeError(msg)
         return len(cast("Any", self.protected_value()))
 
@@ -213,9 +214,7 @@ class NumpyAxisProtected[T: NumpyArrayLike | np.ndarray](NumpyArrayLikeImplement
             yield self[index]
 
     @override
-    def __array_namespace__(
-        self, /, *, api_version: Literal["2022.12", "2023.12", "2024.12"] | None = None
-    ) -> ModuleType:
+    def __array_namespace__(self, /, *, api_version: ArrayAPIVersion | None = None) -> ModuleType:
         return self.protected_value().__array_namespace__(api_version=api_version)
 
     @override
@@ -505,7 +504,9 @@ class NumpyAxisProtected[T: NumpyArrayLike | np.ndarray](NumpyArrayLikeImplement
     ) -> object:
         return numpy_function(func, types, args, kwargs)
 
-    def reshape(self, *shape: int | tuple[int, ...], order: str = "C", copy: bool | None = None) -> Self:
+    def reshape(
+        self, *shape: int | tuple[int, ...], order: str = "C", copy: bool | None = None
+    ) -> NumpyArrayLike[Any] | np.ndarray:
         """Return a copy with reshaped protected values."""
         if len(shape) == 1 and isinstance(shape[0], tuple):
             shape = shape[0]

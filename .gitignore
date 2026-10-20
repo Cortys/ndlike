@@ -9,3 +9,8 @@ build/
 dist/
 .coverage
 htmlcov/
+
+# Editor / OS files
+.idea/
+.vscode/settings.json
+.DS_Store

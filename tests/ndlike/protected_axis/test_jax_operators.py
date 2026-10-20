@@ -17,7 +17,7 @@ import jax.numpy as jnp
 from ndlike import jax_functions as jf
 from ndlike.protected_axis.jax import JaxAxisProtected
 
-_BINARY = [
+_BINARY: list[tuple[Callable, Callable, Callable]] = [
     (operator.add, jf.jax_add, jnp.add),
     (operator.sub, jf.jax_subtract, jnp.subtract),
     (operator.mul, jf.jax_multiply, jnp.multiply),
@@ -31,13 +31,13 @@ _BINARY = [
     (operator.lshift, jf.jax_left_shift, jnp.left_shift),
     (operator.rshift, jf.jax_right_shift, jnp.right_shift),
 ]
-_UNARY = [
+_UNARY: list[tuple[Callable, Callable, Callable]] = [
     (operator.pos, jf.jax_positive, jnp.positive),
     (operator.neg, jf.jax_negative, jnp.negative),
     (operator.abs, jf.jax_absolute, jnp.absolute),
     (operator.invert, jf.jax_invert, jnp.invert),
 ]
-_COMPARISONS = [
+_COMPARISONS: list[tuple[Callable, Callable, Callable]] = [
     (operator.eq, jf.jax_equal, jnp.equal),
     (operator.ne, jf.jax_not_equal, jnp.not_equal),
     (operator.lt, jf.jax_less, jnp.less),
@@ -45,7 +45,10 @@ _COMPARISONS = [
     (operator.gt, jf.jax_greater, jnp.greater),
     (operator.ge, jf.jax_greater_equal, jnp.greater_equal),
 ]
-_PERMITTED = {wrapper for _, wrapper, _ in [*_BINARY, *_UNARY, *_COMPARISONS]} | {jf.jax_divmod, jf.jax_matmul}
+_PERMITTED: set[Callable] = {wrapper for _, wrapper, _ in [*_BINARY, *_UNARY, *_COMPARISONS]} | {
+    jf.jax_divmod,
+    jf.jax_matmul,
+}
 
 
 @dataclass(frozen=True, eq=False)
@@ -291,7 +294,7 @@ def test_instance_permission_veto_is_respected_on_either_operand():
         def protected_values(self, func=None):
             if self.deny and func is not None:
                 return None
-            return super().protected_values(func)
+            return super().protected_values() if func is None else super().protected_values(func)
 
     allowed = Veto(jnp.ones((2, 3)))
     denied = Veto(allowed.array, deny=True)

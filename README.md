@@ -61,26 +61,3 @@ the CPU index on Linux and Windows. Type checking requires both backend extras.
 (BKN001) and restricts runtime Torch/JAX imports to their respective
 backend-prefixed modules (BKN002). Type-only imports are exempt. Intentional
 exceptions use an explicit `# noqa: BKN001` or `# noqa: BKN002` on the opening line.
-
-The extraction intentionally preserves implementation code. `pyproject.toml`
-records scoped Ruff/ty migration exceptions for previously private docstrings,
-runtime override/negative tests, and two Torch protocol implementations. These
-are follow-up typing/documentation work, not a change to runtime behavior.
-
-## Origin and releases
-
-Extracted from [probly](https://github.com/pwhofman/probly) using git-filter-repo,
-preserving the selected files' commit histories, author attribution, and MIT license.
-Probly-specific distribution and quantification tests remain in probly.
-
-The extraction starts from probly commit
-`40bee0c32befead3e68b96e2932c69ceff2173df` (the test-separation PR). Historical
-paths are rewritten throughout the retained history, including the earlier
-`array.py`/`array_functions.py` names. Import updates and standalone project
-configuration are applied afterward; old snapshots are not standalone builds.
-
-Releases follow flextype: update the version in `pyproject.toml`, tag that version,
-and publish a GitHub release. The release workflow builds with uv and publishes
-using PyPI trusted publishing. Configure a pending PyPI publisher for repository
-`Cortys/ndlike`, workflow `publish-release.yml`, environment `release` before the
-first release. No token is stored in the repository.

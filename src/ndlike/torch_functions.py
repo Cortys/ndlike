@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import TYPE_CHECKING
 
 import torch
 from torch.overrides import handle_torch_function, has_torch_function
+
+if TYPE_CHECKING:
+    import sys
+    from typing import Any
+
+    from ndlike.torch_like import TorchLike
+
+    if sys.version_info >= (3, 13):
+        from typing import TypeVar
+    else:
+        from typing_extensions import TypeVar
+
+    # Constraints widen custom subclasses to TorchLike; the native default also
+    # handles dispatch operands supplied only through weights or out.
+    _TorchFamily = TypeVar("_TorchFamily", torch.Tensor, TorchLike[Any], default=torch.Tensor)
 
 
 def _normalize_dims(dim: int | tuple[int, ...] | None, ndim: int) -> tuple[int, ...]:
@@ -66,15 +81,15 @@ def _broadcast_average_weights(
 
 
 def torch_average(
-    tensor: torch.Tensor,
+    tensor: _TorchFamily | torch.Tensor,
     /,
     dim: int | tuple[int, ...] | None = None,
     *,
     axis: int | tuple[int, ...] | None = None,
-    weights: torch.Tensor | None = None,
+    weights: _TorchFamily | torch.Tensor | None = None,
     keepdim: bool = False,
-    out: torch.Tensor | None = None,
-) -> torch.Tensor:
+    out: _TorchFamily | torch.Tensor | None = None,
+) -> torch.Tensor | _TorchFamily:
     """Compute a possibly weighted average over tensor dimensions.
 
     Args:
@@ -109,12 +124,13 @@ def torch_average(
             out=out,
         )
 
+    # Custom operands have already been handled above; only native tensors reach here.
     dims = _normalize_dims(dim, tensor.ndim)
     weight_tensor = None if weights is None else torch.as_tensor(weights, device=tensor.device)
-    tensor = _floating_tensor(tensor, weight_tensor)
+    tensor = _floating_tensor(tensor, weight_tensor)  # ty: ignore[invalid-argument-type]
 
     if weight_tensor is None:
-        return torch.mean(tensor, dim=dims, keepdim=keepdim, out=out)
+        return torch.mean(tensor, dim=dims, keepdim=keepdim, out=out)  # ty: ignore[invalid-argument-type]
 
     weight_tensor = weight_tensor.to(device=tensor.device)
     if not torch.is_floating_point(weight_tensor) and not torch.is_complex(weight_tensor):
@@ -130,7 +146,7 @@ def torch_average(
 
     result = weighted_sum / weight_sum
     if out is not None:
-        cast("Any", out).copy_(result)
+        out.copy_(result)
         return out
     return result
 

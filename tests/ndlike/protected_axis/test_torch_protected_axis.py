@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, assert_type
 
 import numpy as np
 import pytest
@@ -13,6 +13,7 @@ import torch
 
 from ndlike.protected_axis.torch import TorchAxisProtected
 from ndlike.torch_functions import torch_average
+from ndlike.torch_like import TorchLike
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,11 +83,11 @@ def _mixed_tensor_numpy() -> MixedTensorNumpy:
 def test_single_field_torch_functions_preserve_type() -> None:
     x = SingleTensor(torch.arange(6.0).reshape(2, 3))
 
-    expanded = torch.unsqueeze(x, dim=0)
+    expanded = torch.unsqueeze(x, dim=0)  # ty: ignore[invalid-argument-type]
     assert isinstance(expanded, SingleTensor)
     assert tuple(expanded.tensor.shape) == (1, 2, 3)
 
-    stacked = torch.stack((x, x), dim=0)
+    stacked = torch.stack((x, x), dim=0)  # ty: ignore[invalid-argument-type]
     assert isinstance(stacked, SingleTensor)
     assert tuple(stacked.tensor.shape) == (2, 2, 3)
 
@@ -111,7 +112,7 @@ def test_gather_preserves_protected_axes() -> None:
     x = SingleTensor(torch.arange(24.0).reshape(2, 3, 4))
     index = torch.tensor([[2, 0], [1, 1]])
 
-    gathered = torch.gather(x, dim=1, index=index)
+    gathered = torch.gather(x, dim=1, index=index)  # ty: ignore[invalid-argument-type]
 
     assert isinstance(gathered, SingleTensor)
     assert tuple(gathered.tensor.shape) == (2, 2, 4)
@@ -126,7 +127,7 @@ def test_gather_supports_negative_dim() -> None:
     x = SingleTensor(torch.arange(24.0).reshape(2, 3, 4))
     index = torch.tensor([[2, 0], [1, 1]])
 
-    gathered = torch.gather(x, dim=-1, index=index)
+    gathered = torch.gather(x, dim=-1, index=index)  # ty: ignore[invalid-argument-type]
 
     assert isinstance(gathered, SingleTensor)
     torch.testing.assert_close(
@@ -142,7 +143,7 @@ def test_gather_applies_to_all_fields() -> None:
     index = torch.tensor([[2, 0], [1, 1]])
     expanded_index = index.unsqueeze(-1).expand(2, 2, 4)
 
-    gathered = torch.gather(x, dim=1, index=index)
+    gathered = torch.gather(x, dim=1, index=index)  # ty: ignore[invalid-argument-type]
 
     assert isinstance(gathered, InnerPairTensor)
     assert tuple(gathered.left.shape) == (2, 2, 4)
@@ -156,7 +157,7 @@ def test_gather_rejects_protected_axis_dim() -> None:
     index = torch.zeros((2, 3), dtype=torch.long)
 
     with pytest.raises(ValueError, match="axis 2 is out of bounds"):
-        torch.gather(x, dim=2, index=index)
+        torch.gather(x, dim=2, index=index)  # ty: ignore[invalid-argument-type]
 
 
 def test_gather_rejects_index_with_wrong_batch_ndim() -> None:
@@ -164,7 +165,7 @@ def test_gather_rejects_index_with_wrong_batch_ndim() -> None:
     index = torch.zeros((2, 3, 1), dtype=torch.long)
 
     with pytest.raises(ValueError, match="same ndim"):
-        torch.gather(x, dim=1, index=index)
+        torch.gather(x, dim=1, index=index)  # ty: ignore[invalid-argument-type]
 
 
 def test_gather_rejects_numpy_sidecar() -> None:
@@ -172,29 +173,29 @@ def test_gather_rejects_numpy_sidecar() -> None:
     index = torch.tensor([[2, 0], [1, 1]])
 
     with pytest.raises(TypeError):
-        torch.gather(x, dim=1, index=index)
+        torch.gather(x, dim=1, index=index)  # ty: ignore[invalid-argument-type]
 
 
 def test_unpermitted_torch_reductions_return_notimplemented() -> None:
     x = SingleTensor(torch.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError):
-        _ = torch.sum(x)
+        _ = torch.sum(x)  # ty: ignore[invalid-argument-type]
 
     with pytest.raises(TypeError):
-        _ = torch.mean(x)
+        _ = torch.mean(x)  # ty: ignore[invalid-argument-type]
 
 
 def test_permitted_torch_reductions_reduce_only_batch_axes() -> None:
     x = ReductionTensor(torch.arange(24.0).reshape(2, 3, 4))
 
-    summed = torch.sum(x)
+    summed = torch.sum(x)  # ty: ignore[invalid-argument-type]
     assert isinstance(summed, ReductionTensor)
     assert torch.equal(summed.tensor, torch.sum(x.tensor, dim=(0, 1)))
     assert summed.shape == ()
     assert summed.protected_shape == (4,)
 
-    meaned = torch.mean(x, dim=1)
+    meaned = torch.mean(x, dim=1)  # ty: ignore[invalid-argument-type]
     assert isinstance(meaned, ReductionTensor)
     assert torch.equal(meaned.tensor, torch.mean(x.tensor, dim=1))
     assert meaned.shape == (2,)
@@ -233,13 +234,51 @@ def test_unpermitted_torch_average_returns_notimplemented() -> None:
         _ = torch_average(x, dim=0)
 
 
+def test_average_override_can_change_wrapper_class_or_return_a_native_tensor() -> None:
+    @dataclass(frozen=True, slots=True)
+    class _ChangingTensor(SingleTensor):
+        tensor: torch.Tensor
+
+        @classmethod
+        def __torch_function__(
+            cls, func, types, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None
+        ) -> object:
+            del cls, types
+            if func is not torch_average:
+                return NotImplemented
+            original = args[0]
+            assert isinstance(original, _ChangingTensor)
+            result = torch_average(original.tensor, *args[1:], **({} if kwargs is None else kwargs))
+            return result if args[1] is None else SingleTensor(result)
+
+    original = _ChangingTensor(torch.arange(6.0).reshape(2, 3))
+    changed = assert_type(torch_average(original, dim=0), torch.Tensor | TorchLike[Any])
+    assert isinstance(changed, SingleTensor)
+    assert not isinstance(changed, _ChangingTensor)
+    torch.testing.assert_close(changed.tensor, torch_average(original.tensor, dim=0))
+
+    unwrapped = assert_type(torch_average(original), torch.Tensor | TorchLike[Any])
+    assert isinstance(unwrapped, torch.Tensor)
+    torch.testing.assert_close(unwrapped, torch_average(original.tensor))
+
+
+if TYPE_CHECKING:
+
+    def _check_average_family_types(tensor: torch.Tensor, custom: SingleTensor) -> None:
+        assert_type(torch_average(tensor), torch.Tensor)
+        assert_type(torch_average(tensor, weights=tensor, out=tensor), torch.Tensor)
+        assert_type(torch_average(custom), torch.Tensor | TorchLike[Any])
+        assert_type(torch_average(tensor, weights=custom), torch.Tensor | TorchLike[Any])
+        assert_type(torch_average(tensor, out=custom), torch.Tensor | TorchLike[Any])
+
+
 def test_multi_field_tensor_conversion_and_cat() -> None:
     x = PairTensor(torch.ones((2, 2)), torch.ones((2, 2)) * 2)
 
     with pytest.raises(TypeError, match="Cannot convert multi-field"):
         _ = np.asarray(x)
 
-    cat = torch.cat((x, x), dim=0)
+    cat = torch.cat((x, x), dim=0)  # ty: ignore[invalid-argument-type]
     assert isinstance(cat, PairTensor)
     assert tuple(cat.first.shape) == (4, 2)
     assert tuple(cat.second.shape) == (4, 2)
@@ -262,17 +301,17 @@ def test_mixed_numpy_sidecar_structural_unary_ops() -> None:
     assert tuple(reshaped.tensor.shape) == (3, 2, 4)
     np.testing.assert_array_equal(reshaped.sidecar, np.reshape(x.sidecar, (3, 2, 4)))
 
-    transposed = torch.transpose(x, 0, 1)
+    transposed = torch.transpose(x, 0, 1)  # ty: ignore[invalid-argument-type]
     assert isinstance(transposed, MixedTensorNumpy)
     assert tuple(transposed.tensor.shape) == (3, 2, 4)
     np.testing.assert_array_equal(transposed.sidecar, np.swapaxes(x.sidecar, 0, 1))
 
-    permuted = torch.permute(x, (1, 0))
+    permuted = torch.permute(x, (1, 0))  # ty: ignore[invalid-argument-type]
     assert isinstance(permuted, MixedTensorNumpy)
     assert tuple(permuted.tensor.shape) == (3, 2, 4)
     np.testing.assert_array_equal(permuted.sidecar, np.transpose(x.sidecar, (1, 0, 2)))
 
-    unsqueezed = torch.unsqueeze(x, dim=1)
+    unsqueezed = torch.unsqueeze(x, dim=1)  # ty: ignore[invalid-argument-type]
     assert isinstance(unsqueezed, MixedTensorNumpy)
     assert tuple(unsqueezed.tensor.shape) == (2, 1, 3, 4)
     np.testing.assert_array_equal(unsqueezed.sidecar, np.expand_dims(x.sidecar, axis=1))
@@ -282,12 +321,12 @@ def test_mixed_numpy_sidecar_structural_unary_ops() -> None:
     assert tuple(squeezed.tensor.shape) == (2, 3, 4)
     np.testing.assert_array_equal(squeezed.sidecar, x.sidecar)
 
-    not_squeezed = torch.squeeze(x, dim=0)
+    not_squeezed = torch.squeeze(x, dim=0)  # ty: ignore[no-matching-overload]
     assert isinstance(not_squeezed, MixedTensorNumpy)
     assert tuple(not_squeezed.tensor.shape) == (2, 3, 4)
     np.testing.assert_array_equal(not_squeezed.sidecar, x.sidecar)
 
-    moved = torch.moveaxis(x, 0, 1)
+    moved = torch.moveaxis(x, 0, 1)  # ty: ignore[no-matching-overload]
     assert isinstance(moved, MixedTensorNumpy)
     assert tuple(moved.tensor.shape) == (3, 2, 4)
     np.testing.assert_array_equal(moved.sidecar, np.moveaxis(x.sidecar, 0, 1))
@@ -306,12 +345,12 @@ def test_mixed_numpy_sidecar_structural_unary_ops() -> None:
 def test_mixed_numpy_sidecar_sequence_ops() -> None:
     x = _mixed_tensor_numpy()
 
-    stacked = torch.stack((x, x), dim=0)
+    stacked = torch.stack((x, x), dim=0)  # ty: ignore[invalid-argument-type]
     assert isinstance(stacked, MixedTensorNumpy)
     assert tuple(stacked.tensor.shape) == (2, 2, 3, 4)
     np.testing.assert_array_equal(stacked.sidecar, np.stack((x.sidecar, x.sidecar), axis=0))
 
-    cat = torch.cat((x, x), dim=1)
+    cat = torch.cat((x, x), dim=1)  # ty: ignore[invalid-argument-type]
     assert isinstance(cat, MixedTensorNumpy)
     assert tuple(cat.tensor.shape) == (2, 6, 4)
     np.testing.assert_array_equal(cat.sidecar, np.concatenate((x.sidecar, x.sidecar), axis=1))
@@ -343,11 +382,11 @@ def test_mixed_numpy_sidecar_rejects_non_structural_torch_ops() -> None:
     x = _mixed_tensor_numpy()
 
     with pytest.raises(TypeError):
-        _ = torch.clone(x)
+        _ = torch.clone(x)  # ty: ignore[invalid-argument-type]
 
     reducible = MixedReductionTensorNumpy(tensor=x.tensor, sidecar=x.sidecar)
     with pytest.raises(TypeError):
-        _ = torch.sum(reducible)
+        _ = torch.sum(reducible)  # ty: ignore[invalid-argument-type]
 
 
 def test_multi_field_index_and_assignment() -> None:
@@ -377,7 +416,7 @@ def test_nested_multi_field_value_delegates_without_tensor_casts() -> None:
     values = outer.protected_values()
     assert values["inner"] is inner
 
-    expanded = torch.unsqueeze(outer, dim=0)
+    expanded = torch.unsqueeze(outer, dim=0)  # ty: ignore[invalid-argument-type]
     assert isinstance(expanded, OuterNestedTensor)
     assert isinstance(expanded.inner, InnerPairTensor)
     assert tuple(expanded.inner.left.shape) == (1, 2, 3, 4)

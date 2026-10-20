@@ -26,6 +26,7 @@ type _ArrayLikeInt_co = _DualArrayLike[np.dtype[np.bool | np.integer], int]
 type ToIndex = SupportsIndex | slice | EllipsisType | _ArrayLikeInt_co | None
 type ToIndices = ToIndex | tuple[ToIndex, ...]
 type Order = Literal["C", "F", "A", "K"]
+type ArrayAPIVersion = Literal["2022.12", "2023.12", "2024.12", "2025.12"]
 
 _GetFlag = Literal[
     "C",
@@ -117,8 +118,11 @@ class ArrayFlagsLike(Protocol):
 
 
 @runtime_checkable
-class ArrayLike[DT](Protocol):
-    """Protocol for array-like objects.
+class ArrayLikeWithoutSize[DT](Protocol):
+    """Core array protocol shared by NumPy, JAX, and PyTorch.
+
+    This protocol omits ``size`` because PyTorch exposes it as a method rather than
+    the integer element-count property used by NumPy and JAX.
 
     Unlike `numpy.typing.ArrayLike`, this protocol does not only check
     whether an object can be converted to a numpy array, but rather
@@ -136,9 +140,7 @@ class ArrayLike[DT](Protocol):
     def __setitem__(self, index: ToIndices, value: NpArrayLike, /) -> None:
         """Set values selected by index."""
 
-    def __array_namespace__(
-        self, /, *, api_version: Literal["2022.12", "2023.12", "2024.12"] | None = None
-    ) -> ModuleType:
+    def __array_namespace__(self, /, *, api_version: ArrayAPIVersion | None = None) -> ModuleType:
         """Return the namespace of the array, e.g. 'numpy' or 'torch'."""
 
     def to_device(self, device: Literal["cpu"], /, *, stream: int | Any | None = None) -> Self:  # noqa: ANN401
@@ -157,10 +159,6 @@ class ArrayLike[DT](Protocol):
         """Data type of the array."""
 
     @property
-    def size(self) -> int:
-        """Number of elements in the array."""
-
-    @property
     def device(self) -> Any:  # noqa: ANN401
         """Device of the array."""
 
@@ -177,6 +175,22 @@ class ArrayLike[DT](Protocol):
 
     def __iter__(self) -> Iterator[Any]:
         """Iterator over the first axis."""
+
+
+@runtime_checkable
+class ArrayLike[DT](ArrayLikeWithoutSize[DT], Protocol):
+    """Core array protocol extended with an integer element-count property.
+
+    Unlike `numpy.typing.ArrayLike`, this protocol does not only check
+    whether an object can be converted to a numpy array, but rather
+    whether it supports core indexing and shape/metadata operations similar to a numpy array.
+    This protocol is based in the Python array API standard: https://data-apis.org/array-api
+    Unlike the official standard, this protocol does not require support for all numerical operations.
+    """
+
+    @property
+    def size(self) -> int:
+        """Number of elements in the array."""
 
 
 @runtime_checkable
@@ -208,17 +222,17 @@ class NumpyArrayLike[DT](ArrayLike[DT], Protocol):
         """Handle numpy array functions."""
 
     @property
-    def mT(self) -> Self:  # noqa: N802
+    def mT(self) -> NumpyArrayLike[Any] | np.ndarray:  # noqa: N802
         """Matrix-transposed view."""
 
     @property
-    def T(self) -> Self:  # noqa: N802
+    def T(self) -> NumpyArrayLike[Any] | np.ndarray:  # noqa: N802
         """Transposed view."""
 
-    def transpose(self, *axes: int | None) -> Self:
+    def transpose(self, *axes: int | None) -> NumpyArrayLike[Any] | np.ndarray:
         """Return transposed array."""
 
-    def copy(self, order: Order = "C") -> Self:
+    def copy(self, order: Order = "C") -> NumpyArrayLike[Any] | np.ndarray:
         """Return array copy."""
 
     def astype(
@@ -228,7 +242,7 @@ class NumpyArrayLike[DT](ArrayLike[DT], Protocol):
         casting: Literal["no", "equiv", "safe", "same_kind", "unsafe"] = "unsafe",
         subok: bool = True,
         copy: bool = True,
-    ) -> Self:
+    ) -> NumpyArrayLike[Any] | np.ndarray:
         """Return cast array."""
 
     @property
@@ -239,7 +253,40 @@ class NumpyArrayLike[DT](ArrayLike[DT], Protocol):
 class NumpyArrayLikeImplementation[DT: NumpyArrayLike | np.ndarray](
     ArrayLike[DT], np.lib.mixins.NDArrayOperatorsMixin, ABC
 ):
-    """ABC implementation for array-like objects that behave like NumPy arrays."""
+    """ABC implementation for array-like objects that behave like NumPy arrays.
+
+    Representation-specific conversion and metadata are explicitly abstract rather
+    than inherited as protocol placeholders. Unsupported indexing, iteration and
+    scalar conversions retain their concrete ``NotImplementedError`` fallbacks.
+    """
+
+    @abstractmethod
+    def __array__(self, dtype: DTypeLike | None = None, /, *, copy: bool | None = None) -> np.ndarray:
+        """Convert to a NumPy array."""
+
+    @abstractmethod
+    def __array_namespace__(self, /, *, api_version: ArrayAPIVersion | None = None) -> ModuleType:
+        """Return the array namespace."""
+
+    @property
+    @abstractmethod
+    def device(self) -> Any:  # noqa: ANN401
+        """Device of the array."""
+
+    @property
+    @abstractmethod
+    def ndim(self) -> int:
+        """Number of dimensions."""
+
+    @property
+    @abstractmethod
+    def shape(self) -> tuple[int, ...]:
+        """Shape of the array."""
+
+    @property
+    @abstractmethod
+    def size(self) -> int:
+        """Number of elements in the array."""
 
     def __getitem__(self: Self, index: ToIndices, /) -> NumpyArrayLikeImplementation[DT] | DT:
         """Return a new array containing the indexed values."""
@@ -292,16 +339,16 @@ class NumpyArrayLikeImplementation[DT: NumpyArrayLike | np.ndarray](
         """
 
     @property
-    def mT(self) -> Self:  # noqa: N802
+    def mT(self) -> NumpyArrayLike[Any] | np.ndarray:  # noqa: N802
         """The transposed version of the underlying array."""
-        return np.matrix_transpose(self)  # ty: ignore[invalid-return-type]
+        return np.matrix_transpose(self)
 
     @property
-    def T(self) -> Self:  # noqa: N802
+    def T(self) -> NumpyArrayLike[Any] | np.ndarray:  # noqa: N802
         """The transposed version of the underlying array."""
-        return np.transpose(self)  # ty: ignore[invalid-return-type]
+        return np.transpose(self)
 
-    def transpose(self, *axes: int | None) -> Self:
+    def transpose(self, *axes: int | None) -> NumpyArrayLike[Any] | np.ndarray:
         """Return a transposed version of the NumpySample.
 
         This method implicitly also provides full axis tracking support for
@@ -316,12 +363,12 @@ class NumpyArrayLikeImplementation[DT: NumpyArrayLike | np.ndarray](
             A transposed version of the NumpySample.
         """
         if len(axes) == 0:
-            return np.transpose(self)  # ty:ignore[invalid-return-type]
+            return np.transpose(self)
         if len(axes) == 1 and not isinstance(axes[0], int):
-            return np.transpose(self, axes[0])  # ty:ignore[invalid-return-type]
+            return np.transpose(self, axes[0])
         return np.transpose(self, axes)  # ty:ignore[no-matching-overload]
 
-    def copy(self, order: Order = "C") -> Self:
+    def copy(self, order: Order = "C") -> NumpyArrayLike[Any] | np.ndarray:
         """Return a copy of the array."""
         return np.copy(self, order=order, subok=True)  # ty:ignore[no-matching-overload]
 
@@ -332,7 +379,7 @@ class NumpyArrayLikeImplementation[DT: NumpyArrayLike | np.ndarray](
         casting: Literal["no", "equiv", "safe", "same_kind", "unsafe"] = "unsafe",
         subok: bool = True,
         copy: bool = True,
-    ) -> Self:
+    ) -> NumpyArrayLike[Any] | np.ndarray:
         """Copy of the array, cast to a specified type."""
         if order != "K" or casting != "unsafe" or not subok:
             msg = "Non-default ndarray.astype options require a representation-specific implementation."

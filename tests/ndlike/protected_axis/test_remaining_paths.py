@@ -206,7 +206,7 @@ def test_concatenate_with_protected_out_and_no_protected_input_raises() -> None:
     out = _ConcatTarget(np.zeros((4, 3)))
 
     with pytest.raises(TypeError, match="at least one protected input"):
-        _ = np.concatenate((raw_a, raw_b), axis=0, out=out)
+        _ = np.concatenate((raw_a, raw_b), axis=0, out=out)  # ty: ignore[no-matching-overload]
 
 
 def test_stack_with_protected_out_and_no_protected_input_raises() -> None:
@@ -216,7 +216,7 @@ def test_stack_with_protected_out_and_no_protected_input_raises() -> None:
     out = _ConcatTarget(np.zeros((2, 2, 3)))
 
     with pytest.raises(TypeError, match="at least one protected input"):
-        _ = np.stack((raw_a, raw_b), axis=0, out=out)
+        _ = np.stack((raw_a, raw_b), axis=0, out=out)  # ty: ignore[no-matching-overload]
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +236,7 @@ def test_concatenate_rejects_mismatched_out_layout() -> None:
     bad_out = _OtherTarget(np.zeros((4, 3)))
 
     with pytest.raises(ValueError, match="same protected_axes layout"):
-        _ = np.concatenate((x, x), axis=0, out=bad_out)
+        _ = np.concatenate((x, x), axis=0, out=bad_out)  # ty: ignore[no-matching-overload]
 
 
 def test_stack_rejects_mismatched_out_layout() -> None:
@@ -245,7 +245,7 @@ def test_stack_rejects_mismatched_out_layout() -> None:
     bad_out = _OtherTarget(np.zeros((2, 2, 3)))
 
     with pytest.raises(ValueError, match="same protected_axes layout"):
-        _ = np.stack((x, x), axis=0, out=bad_out)
+        _ = np.stack((x, x), axis=0, out=bad_out)  # ty: ignore[no-matching-overload]
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +259,7 @@ def test_concatenate_with_protected_out_writes_into_buffer() -> None:
     y = _ConcatTarget(np.arange(6.0).reshape(2, 3) + 100)
     out = _ConcatTarget(np.zeros((4, 3)))
 
-    result = np.concatenate((x, y), axis=0, out=out)
+    result = np.concatenate((x, y), axis=0, out=out)  # ty: ignore[no-matching-overload]
     assert result is out
     np.testing.assert_array_equal(out.array, np.concatenate((x.array, y.array), axis=0))
 
@@ -270,7 +270,7 @@ def test_stack_with_protected_out_writes_into_buffer() -> None:
     y = _ConcatTarget(np.arange(6.0).reshape(2, 3) + 100)
     out = _ConcatTarget(np.zeros((2, 2, 3)))
 
-    result = np.stack((x, y), axis=0, out=out)
+    result = np.stack((x, y), axis=0, out=out)  # ty: ignore[no-matching-overload]
     assert result is out
     np.testing.assert_array_equal(out.array, np.stack((x.array, y.array), axis=0))
 

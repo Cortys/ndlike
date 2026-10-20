@@ -9,13 +9,14 @@ wrappers over the ``jax.numpy`` functions probly needs. Call ``jax_reshape(x, ..
 ``jnp.reshape(x, ...)`` so custom objects get a say.
 
 Dispatch duck-types on ``__jax_function__`` being defined on the argument's *type*, so this module
-never imports :mod:`ndlike.jax_like` and the import graph stays one-way.
+never imports :mod:`ndlike.jax_like` at runtime and the import graph stays one-way.
 
 The :func:`jax_function_dispatch` decorator selects operands by parameter name and preserves
-public signatures and documentation. Operator overloads give native operands precise array
-result types; arbitrary :class:`SupportsJaxFunction` overrides have an ``object`` result type.
-Their native implementation bodies run only after dispatch has excluded custom overrides,
-which is why narrowing casts to native operand types are safe there.
+public signatures and documentation. A constrained type variable distinguishes native and
+custom array families without promising to preserve a concrete wrapper class. Custom arrays
+may become another JaxLike or a native array, for example when a sample axis is reduced away.
+The native family is the default for scalar and NumPy inputs. Arbitrary non-array overrides
+remain supported at runtime by the dispatch helpers, outside the wrappers' typed array contract.
 """
 
 from __future__ import annotations
@@ -28,10 +29,22 @@ import jax.numpy as jnp
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
+    import sys
 
     import jax
     from jax.sharding import Sharding
     from jax.typing import ArrayLike as JaxArrayLike, DTypeLike
+
+    from ndlike.jax_like import JaxLike
+
+    if sys.version_info >= (3, 13):
+        from typing import TypeVar
+    else:
+        from typing_extensions import TypeVar
+
+    # Equivalent to a PEP 695 constrained parameter, with a native default. The
+    # TypeVar spelling keeps defaults compatible with Python 3.12 (PEP 696 is 3.13+).
+    _JaxFamily = TypeVar("_JaxFamily", jax.Array, JaxLike[Any], default=jax.Array)
 
 
 class SupportsJaxFunction(Protocol):
@@ -204,16 +217,8 @@ def try_jax_function(  # noqa: BKN001
     return NotImplemented
 
 
-@overload
-def jax_add(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_add(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
-
-
 @jax_function_dispatch("x1", "x2")
-def jax_add(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_add(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Add two operands elementwise, mirroring ``jax.numpy.add``.
 
     Args:
@@ -223,19 +228,11 @@ def jax_add(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         The elementwise sum, or the result supplied by a custom override.
     """
-    return jnp.add(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_subtract(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_subtract(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.add(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_subtract(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_subtract(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Subtract operands elementwise, mirroring ``jax.numpy.subtract``.
 
     Args:
@@ -245,19 +242,11 @@ def jax_subtract(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         ``x1 - x2`` elementwise, or the result supplied by a custom override.
     """
-    return jnp.subtract(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_multiply(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_multiply(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.subtract(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_multiply(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_multiply(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Multiply operands elementwise, mirroring ``jax.numpy.multiply``.
 
     Args:
@@ -267,19 +256,11 @@ def jax_multiply(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         The elementwise product, or the result supplied by a custom override.
     """
-    return jnp.multiply(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_true_divide(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_true_divide(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.multiply(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_true_divide(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_true_divide(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Divide operands elementwise, mirroring ``jax.numpy.true_divide``.
 
     Args:
@@ -289,19 +270,11 @@ def jax_true_divide(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         The true quotient ``x1 / x2``, or a custom override result.
     """
-    return jnp.true_divide(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_floor_divide(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_floor_divide(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.true_divide(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_floor_divide(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_floor_divide(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Floor-divide operands, mirroring ``jax.numpy.floor_divide``.
 
     Args:
@@ -311,19 +284,11 @@ def jax_floor_divide(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         The quotient rounded toward negative infinity, or a custom override result.
     """
-    return jnp.floor_divide(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_remainder(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_remainder(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.floor_divide(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_remainder(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_remainder(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Compute floor-division remainders, mirroring ``jax.numpy.remainder``.
 
     Args:
@@ -333,19 +298,13 @@ def jax_remainder(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         The elementwise remainder, or the result supplied by a custom override.
     """
-    return jnp.remainder(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_divmod(x1: JaxArrayLike, x2: JaxArrayLike, /) -> tuple[jax.Array, jax.Array]: ...
-
-
-@overload
-def jax_divmod(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.remainder(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_divmod(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_divmod(
+    x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /
+) -> tuple[jax.Array | _JaxFamily, jax.Array | _JaxFamily]:
     """Compute quotients and remainders, mirroring ``jax.numpy.divmod``.
 
     Args:
@@ -356,19 +315,11 @@ def jax_divmod(x1: JaxOperand, x2: JaxOperand, /) -> object:
         A tuple of floor-division quotients and remainders for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.divmod(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_power(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_power(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.divmod(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_power(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_power(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Raise operands to powers elementwise, mirroring ``jax.numpy.power``.
 
     Args:
@@ -378,19 +329,11 @@ def jax_power(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         ``x1 ** x2`` elementwise, or the result supplied by a custom override.
     """
-    return jnp.power(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_matmul(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_matmul(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.power(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_matmul(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_matmul(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Multiply matrices or vectors, mirroring ``jax.numpy.matmul``.
 
     Args:
@@ -401,19 +344,11 @@ def jax_matmul(x1: JaxOperand, x2: JaxOperand, /) -> object:
         The matrix product with broadcast batch dimensions for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.matmul(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_bitwise_and(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_bitwise_and(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.matmul(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_bitwise_and(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_bitwise_and(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Compute bitwise AND, mirroring ``jax.numpy.bitwise_and``.
 
     Args:
@@ -423,19 +358,11 @@ def jax_bitwise_and(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         The elementwise bitwise AND, or a custom override result.
     """
-    return jnp.bitwise_and(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_bitwise_or(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_bitwise_or(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.bitwise_and(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_bitwise_or(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_bitwise_or(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Compute bitwise OR, mirroring ``jax.numpy.bitwise_or``.
 
     Args:
@@ -445,19 +372,11 @@ def jax_bitwise_or(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         The elementwise bitwise OR, or a custom override result.
     """
-    return jnp.bitwise_or(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_bitwise_xor(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_bitwise_xor(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.bitwise_or(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_bitwise_xor(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_bitwise_xor(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Compute bitwise exclusive OR, mirroring ``jax.numpy.bitwise_xor``.
 
     Args:
@@ -467,19 +386,11 @@ def jax_bitwise_xor(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         The elementwise bitwise exclusive OR, or a custom override result.
     """
-    return jnp.bitwise_xor(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_left_shift(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_left_shift(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.bitwise_xor(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_left_shift(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_left_shift(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Shift bits left elementwise, mirroring ``jax.numpy.left_shift``.
 
     Args:
@@ -489,19 +400,11 @@ def jax_left_shift(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         The left-shifted values, or the result supplied by a custom override.
     """
-    return jnp.left_shift(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_right_shift(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_right_shift(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.left_shift(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_right_shift(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_right_shift(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Shift bits right elementwise, mirroring ``jax.numpy.right_shift``.
 
     Args:
@@ -511,19 +414,11 @@ def jax_right_shift(x1: JaxOperand, x2: JaxOperand, /) -> object:
     Returns:
         The right-shifted values, or the result supplied by a custom override.
     """
-    return jnp.right_shift(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_equal(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_equal(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.right_shift(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_equal(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Compare operands for equality, mirroring ``jax.numpy.equal``.
 
     Args:
@@ -534,19 +429,11 @@ def jax_equal(x1: JaxOperand, x2: JaxOperand, /) -> object:
         An elementwise boolean equality array for native operands, or a custom
         override result. Protected-axis overrides return batch-shaped masks.
     """
-    return jnp.equal(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_not_equal(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_not_equal(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.equal(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_not_equal(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_not_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Compare operands for inequality, mirroring ``jax.numpy.not_equal``.
 
     Args:
@@ -557,19 +444,11 @@ def jax_not_equal(x1: JaxOperand, x2: JaxOperand, /) -> object:
         An elementwise boolean inequality array for native operands, or a custom
         override result. Protected-axis overrides return batch-shaped masks.
     """
-    return jnp.not_equal(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_less(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_less(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.not_equal(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_less(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_less(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Test whether the left operand is smaller, mirroring ``jax.numpy.less``.
 
     Args:
@@ -580,19 +459,11 @@ def jax_less(x1: JaxOperand, x2: JaxOperand, /) -> object:
         The elementwise boolean result of ``x1 < x2`` for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.less(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_less_equal(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_less_equal(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.less(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_less_equal(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_less_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Test the less-than-or-equal relation, mirroring ``jax.numpy.less_equal``.
 
     Args:
@@ -603,19 +474,11 @@ def jax_less_equal(x1: JaxOperand, x2: JaxOperand, /) -> object:
         The elementwise boolean result of ``x1 <= x2`` for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.less_equal(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_greater(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_greater(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.less_equal(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_greater(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_greater(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Test whether the left operand is larger, mirroring ``jax.numpy.greater``.
 
     Args:
@@ -626,19 +489,11 @@ def jax_greater(x1: JaxOperand, x2: JaxOperand, /) -> object:
         The elementwise boolean result of ``x1 > x2`` for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.greater(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_greater_equal(x1: JaxArrayLike, x2: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_greater_equal(x1: JaxOperand, x2: JaxOperand, /) -> object: ...
+    return jnp.greater(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_greater_equal(x1: JaxOperand, x2: JaxOperand, /) -> object:
+def jax_greater_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Test the greater-than-or-equal relation, mirroring ``jax.numpy.greater_equal``.
 
     Args:
@@ -649,19 +504,11 @@ def jax_greater_equal(x1: JaxOperand, x2: JaxOperand, /) -> object:
         The elementwise boolean result of ``x1 >= x2`` for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.greater_equal(cast("JaxArrayLike", x1), cast("JaxArrayLike", x2))
-
-
-@overload
-def jax_positive(x: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_positive(x: JaxOperand, /) -> object: ...
+    return jnp.greater_equal(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x")
-def jax_positive(x: JaxOperand, /) -> object:
+def jax_positive(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Apply unary positive, mirroring ``jax.numpy.positive``.
 
     Args:
@@ -670,19 +517,11 @@ def jax_positive(x: JaxOperand, /) -> object:
     Returns:
         The positive array, or the result supplied by a custom override.
     """
-    return jnp.positive(cast("JaxArrayLike", x))
-
-
-@overload
-def jax_negative(x: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_negative(x: JaxOperand, /) -> object: ...
+    return jnp.positive(x)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x")
-def jax_negative(x: JaxOperand, /) -> object:
+def jax_negative(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Negate an operand elementwise, mirroring ``jax.numpy.negative``.
 
     Args:
@@ -691,19 +530,11 @@ def jax_negative(x: JaxOperand, /) -> object:
     Returns:
         The elementwise negation, or the result supplied by a custom override.
     """
-    return jnp.negative(cast("JaxArrayLike", x))
-
-
-@overload
-def jax_absolute(x: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_absolute(x: JaxOperand, /) -> object: ...
+    return jnp.negative(x)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x")
-def jax_absolute(x: JaxOperand, /) -> object:
+def jax_absolute(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Compute absolute values elementwise, mirroring ``jax.numpy.absolute``.
 
     Args:
@@ -712,19 +543,11 @@ def jax_absolute(x: JaxOperand, /) -> object:
     Returns:
         The elementwise magnitudes, or the result supplied by a custom override.
     """
-    return jnp.absolute(cast("JaxArrayLike", x))
-
-
-@overload
-def jax_invert(x: JaxArrayLike, /) -> jax.Array: ...
-
-
-@overload
-def jax_invert(x: JaxOperand, /) -> object: ...
+    return jnp.absolute(x)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x")
-def jax_invert(x: JaxOperand, /) -> object:
+def jax_invert(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Invert bits elementwise, mirroring ``jax.numpy.invert``.
 
     Args:
@@ -733,10 +556,10 @@ def jax_invert(x: JaxOperand, /) -> object:
     Returns:
         The bitwise complement, or the result supplied by a custom override.
     """
-    return jnp.invert(cast("JaxArrayLike", x))
+    return jnp.invert(x)  # ty: ignore[invalid-argument-type]
 
 
-@jax_function_dispatch("a")
+@overload
 def jax_reshape(
     a: JaxArrayLike,
     /,
@@ -744,7 +567,29 @@ def jax_reshape(
     order: str = "C",
     *,
     copy: bool | None = None,
-) -> jax.Array:
+) -> jax.Array: ...
+
+
+@overload
+def jax_reshape(
+    a: JaxLike[Any],
+    /,
+    shape: int | Sequence[int | None],
+    order: str = "C",
+    *,
+    copy: bool | None = None,
+) -> jax.Array | JaxLike[Any]: ...
+
+
+@jax_function_dispatch("a")
+def jax_reshape(
+    a: _JaxFamily | JaxArrayLike,
+    /,
+    shape: int | Sequence[int | None],
+    order: str = "C",
+    *,
+    copy: bool | None = None,
+) -> jax.Array | _JaxFamily:
     """Return a reshaped version of the array, mirroring ``jax.numpy.reshape``.
 
     Args:
@@ -756,11 +601,11 @@ def jax_reshape(
     Returns:
         The reshaped array.
     """
-    return jnp.reshape(a, shape, order, copy=copy)
+    return jnp.reshape(a, shape, order, copy=copy)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a")
-def jax_transpose(a: JaxArrayLike, /, axes: Sequence[int] | None = None) -> jax.Array:
+def jax_transpose(a: _JaxFamily | JaxArrayLike, /, axes: Sequence[int] | None = None) -> jax.Array | _JaxFamily:
     """Return a transposed version of the array, mirroring ``jax.numpy.transpose``.
 
     Args:
@@ -770,11 +615,11 @@ def jax_transpose(a: JaxArrayLike, /, axes: Sequence[int] | None = None) -> jax.
     Returns:
         The transposed array.
     """
-    return jnp.transpose(a, axes)
+    return jnp.transpose(a, axes)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x")
-def jax_matrix_transpose(x: JaxArrayLike, /) -> jax.Array:
+def jax_matrix_transpose(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Transpose the last two axes of the array, mirroring ``jax.numpy.matrix_transpose``.
 
     Args:
@@ -783,16 +628,16 @@ def jax_matrix_transpose(x: JaxArrayLike, /) -> jax.Array:
     Returns:
         The array with its last two axes swapped.
     """
-    return jnp.matrix_transpose(x)
+    return jnp.matrix_transpose(x)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a")
 def jax_moveaxis(
-    a: JaxArrayLike,
+    a: _JaxFamily | JaxArrayLike,
     /,
     source: int | Sequence[int],
     destination: int | Sequence[int],
-) -> jax.Array:
+) -> jax.Array | _JaxFamily:
     """Move axes of the array to new positions, mirroring ``jax.numpy.moveaxis``.
 
     Args:
@@ -803,11 +648,11 @@ def jax_moveaxis(
     Returns:
         The array with the axes moved.
     """
-    return jnp.moveaxis(a, source, destination)
+    return jnp.moveaxis(a, source, destination)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a")
-def jax_swapaxes(a: JaxArrayLike, /, axis1: int, axis2: int) -> jax.Array:
+def jax_swapaxes(a: _JaxFamily | JaxArrayLike, /, axis1: int, axis2: int) -> jax.Array | _JaxFamily:
     """Swap two axes of the array, mirroring ``jax.numpy.swapaxes``.
 
     Args:
@@ -818,11 +663,11 @@ def jax_swapaxes(a: JaxArrayLike, /, axis1: int, axis2: int) -> jax.Array:
     Returns:
         The array with the two axes swapped.
     """
-    return jnp.swapaxes(a, axis1, axis2)
+    return jnp.swapaxes(a, axis1, axis2)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a")
-def jax_squeeze(a: JaxArrayLike, /, axis: int | Sequence[int] | None = None) -> jax.Array:
+def jax_squeeze(a: _JaxFamily | JaxArrayLike, /, axis: int | Sequence[int] | None = None) -> jax.Array | _JaxFamily:
     """Remove axes of length one, mirroring ``jax.numpy.squeeze``.
 
     Args:
@@ -832,11 +677,11 @@ def jax_squeeze(a: JaxArrayLike, /, axis: int | Sequence[int] | None = None) -> 
     Returns:
         The squeezed array.
     """
-    return jnp.squeeze(a, axis)
+    return jnp.squeeze(a, axis)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a")
-def jax_expand_dims(a: JaxArrayLike, /, axis: int | Sequence[int]) -> jax.Array:
+def jax_expand_dims(a: _JaxFamily | JaxArrayLike, /, axis: int | Sequence[int]) -> jax.Array | _JaxFamily:
     """Insert axes of length one, mirroring ``jax.numpy.expand_dims``.
 
     Args:
@@ -846,16 +691,16 @@ def jax_expand_dims(a: JaxArrayLike, /, axis: int | Sequence[int]) -> jax.Array:
     Returns:
         The expanded array.
     """
-    return jnp.expand_dims(a, axis)
+    return jnp.expand_dims(a, axis)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch(unpack=("arrays",))
 def jax_concatenate(
-    arrays: Sequence[JaxArrayLike],
+    arrays: Sequence[_JaxFamily | JaxArrayLike],
     /,
     axis: int | None = 0,
     dtype: DTypeLike | None = None,
-) -> jax.Array:
+) -> jax.Array | _JaxFamily:
     """Join a sequence of arrays along an existing axis, mirroring ``jax.numpy.concatenate``.
 
     Args:
@@ -866,17 +711,17 @@ def jax_concatenate(
     Returns:
         The concatenated array.
     """
-    return jnp.concatenate(arrays, axis, dtype=dtype)
+    return jnp.concatenate(arrays, axis, dtype=dtype)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch(unpack=("arrays",))
 def jax_stack(
-    arrays: Sequence[JaxArrayLike],
+    arrays: Sequence[_JaxFamily | JaxArrayLike],
     /,
     axis: int = 0,
     out: None = None,
     dtype: DTypeLike | None = None,
-) -> jax.Array:
+) -> jax.Array | _JaxFamily:
     """Join a sequence of arrays along a new axis, mirroring ``jax.numpy.stack``.
 
     Args:
@@ -888,18 +733,18 @@ def jax_stack(
     Returns:
         The stacked array.
     """
-    return jnp.stack(arrays, axis, out, dtype=dtype)
+    return jnp.stack(arrays, axis, out, dtype=dtype)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("arr", "indices")
 def jax_take_along_axis(
-    arr: JaxArrayLike,
+    arr: _JaxFamily | JaxArrayLike,
     /,
-    indices: JaxArrayLike,
+    indices: _JaxFamily | JaxArrayLike,
     axis: int | None = -1,
     mode: str | None = None,
     fill_value: Any = None,  # noqa: ANN401
-) -> jax.Array:
+) -> jax.Array | _JaxFamily:
     """Take values along an axis, mirroring ``jax.numpy.take_along_axis``.
 
     Args:
@@ -912,11 +757,11 @@ def jax_take_along_axis(
     Returns:
         The gathered array.
     """
-    return jnp.take_along_axis(arr, indices, axis, mode=mode, fill_value=fill_value)
+    return jnp.take_along_axis(arr, indices, axis, mode=mode, fill_value=fill_value)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x")
-def jax_conj(x: JaxArrayLike, /) -> jax.Array:
+def jax_conj(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Return the complex conjugate of the array, mirroring ``jax.numpy.conj``.
 
     Args:
@@ -925,11 +770,11 @@ def jax_conj(x: JaxArrayLike, /) -> jax.Array:
     Returns:
         The conjugated array.
     """
-    return jnp.conj(x)
+    return jnp.conj(x)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a")
-def jax_copy(a: JaxArrayLike, /, order: str | None = None) -> jax.Array:
+def jax_copy(a: _JaxFamily | JaxArrayLike, /, order: str | None = None) -> jax.Array | _JaxFamily:
     """Return a copy of the array, mirroring ``jax.numpy.copy``.
 
     Args:
@@ -939,18 +784,18 @@ def jax_copy(a: JaxArrayLike, /, order: str | None = None) -> jax.Array:
     Returns:
         The copied array.
     """
-    return jnp.copy(a, order)
+    return jnp.copy(a, order)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("x")
 def jax_astype(
-    x: JaxArrayLike,
+    x: _JaxFamily | JaxArrayLike,
     /,
     dtype: DTypeLike | None,
     *,
     copy: bool = False,
     device: jax.Device | Sharding | None = None,
-) -> jax.Array:
+) -> jax.Array | _JaxFamily:
     """Cast the array to a new data type, mirroring ``jax.numpy.astype``.
 
     Args:
@@ -962,20 +807,20 @@ def jax_astype(
     Returns:
         The cast array.
     """
-    return jnp.astype(x, dtype, copy=copy, device=device)
+    return jnp.astype(x, dtype, copy=copy, device=device)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a", "where")
 def jax_mean(
-    a: JaxArrayLike,
+    a: _JaxFamily | JaxArrayLike,
     /,
     axis: int | Sequence[int] | None = None,
     dtype: DTypeLike | None = None,
     out: None = None,
     keepdims: bool = False,
     *,
-    where: JaxArrayLike | None = None,
-) -> jax.Array:
+    where: _JaxFamily | JaxArrayLike | None = None,
+) -> jax.Array | _JaxFamily:
     """Compute the arithmetic mean, mirroring ``jax.numpy.mean``.
 
     Args:
@@ -989,20 +834,20 @@ def jax_mean(
     Returns:
         The mean of the array.
     """
-    return jnp.mean(a, axis, dtype, out, keepdims, where=where)
+    return jnp.mean(a, axis, dtype, out, keepdims, where=where)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a", "initial", "where")
 def jax_sum(
-    a: JaxArrayLike,
+    a: _JaxFamily | JaxArrayLike,
     /,
     axis: int | Sequence[int] | None = None,
     dtype: DTypeLike | None = None,
     out: None = None,
     keepdims: bool = False,
-    initial: JaxArrayLike | None = None,
-    where: JaxArrayLike | None = None,
-) -> jax.Array:
+    initial: _JaxFamily | JaxArrayLike | None = None,
+    where: _JaxFamily | JaxArrayLike | None = None,
+) -> jax.Array | _JaxFamily:
     """Compute the sum, mirroring ``jax.numpy.sum``.
 
     Args:
@@ -1017,12 +862,12 @@ def jax_sum(
     Returns:
         The sum of the array.
     """
-    return jnp.sum(a, axis, dtype, out, keepdims, initial, where)
+    return jnp.sum(a, axis, dtype, out, keepdims, initial, where)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a", "where")
 def jax_std(
-    a: JaxArrayLike,
+    a: _JaxFamily | JaxArrayLike,
     /,
     axis: int | Sequence[int] | None = None,
     dtype: DTypeLike | None = None,
@@ -1030,8 +875,8 @@ def jax_std(
     ddof: int = 0,
     keepdims: bool = False,
     *,
-    where: JaxArrayLike | None = None,
-) -> jax.Array:
+    where: _JaxFamily | JaxArrayLike | None = None,
+) -> jax.Array | _JaxFamily:
     """Compute the standard deviation, mirroring ``jax.numpy.std``.
 
     Args:
@@ -1046,12 +891,12 @@ def jax_std(
     Returns:
         The standard deviation of the array.
     """
-    return jnp.std(a, axis, dtype, out, ddof, keepdims, where=where)
+    return jnp.std(a, axis, dtype, out, ddof, keepdims, where=where)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a", "where")
 def jax_var(
-    a: JaxArrayLike,
+    a: _JaxFamily | JaxArrayLike,
     /,
     axis: int | Sequence[int] | None = None,
     dtype: DTypeLike | None = None,
@@ -1059,8 +904,8 @@ def jax_var(
     ddof: int = 0,
     keepdims: bool = False,
     *,
-    where: JaxArrayLike | None = None,
-) -> jax.Array:
+    where: _JaxFamily | JaxArrayLike | None = None,
+) -> jax.Array | _JaxFamily:
     """Compute the variance, mirroring ``jax.numpy.var``.
 
     Args:
@@ -1075,18 +920,18 @@ def jax_var(
     Returns:
         The variance of the array.
     """
-    return jnp.var(a, axis, dtype, out, ddof, keepdims, where=where)
+    return jnp.var(a, axis, dtype, out, ddof, keepdims, where=where)  # ty: ignore[invalid-argument-type]
 
 
 @jax_function_dispatch("a", "weights")
 def jax_average(
-    a: JaxArrayLike,
+    a: _JaxFamily | JaxArrayLike,
     /,
     axis: int | Sequence[int] | None = None,
-    weights: JaxArrayLike | None = None,
+    weights: _JaxFamily | JaxArrayLike | None = None,
     returned: bool = False,
     keepdims: bool = False,
-) -> jax.Array | tuple[jax.Array, jax.Array]:
+) -> jax.Array | _JaxFamily | tuple[jax.Array | _JaxFamily, jax.Array | _JaxFamily]:
     """Compute a possibly weighted average, mirroring ``jax.numpy.average``.
 
     Args:
@@ -1099,7 +944,7 @@ def jax_average(
     Returns:
         The weighted average, and the sum of the weights if ``returned`` is True.
     """
-    return jnp.average(a, axis, weights, returned, keepdims)
+    return jnp.average(a, axis, weights, returned, keepdims)  # ty: ignore[no-matching-overload]
 
 
 __all__ = [

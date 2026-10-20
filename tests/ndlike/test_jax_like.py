@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from inspect import isabstract
+from typing import Any, assert_type
+from typing_extensions import get_protocol_members
 
 import numpy as np
 import pytest
@@ -18,6 +20,7 @@ from ndlike.jax_functions import (
     has_jax_function,
     jax_average,
     jax_concatenate,
+    jax_copy,
     jax_mean,
     jax_reshape,
     jax_stack,
@@ -75,6 +78,35 @@ class _Wrapper(JaxLikeImplementation[jax.Array]):
     def size(self) -> int:
         return self.array.size
 
+    @property
+    def at(self):
+        return self.array.at
+
+    @property
+    def sharding(self):
+        return self.array.sharding
+
+    def devices(self) -> set[jax.Device]:
+        return self.array.devices()
+
+    def __getitem__(self, index):  # noqa: ANN204
+        return type(self)(self.array[index], self.label)
+
+    def __setitem__(self, index, value) -> None:
+        del index, value
+        msg = "JAX arrays are immutable."
+        raise NotImplementedError(msg)
+
+    def __array_namespace__(self, /, *, api_version=None):  # noqa: ANN204
+        del api_version
+        return jnp
+
+    def __len__(self) -> int:
+        return len(self.array)
+
+    def __iter__(self):  # noqa: ANN204
+        return (self[index] for index in range(len(self)))
+
 
 @dataclass(frozen=True)
 class _Convertible:
@@ -118,7 +150,7 @@ class _Convertible:
 
     @property
     def dtype(self):
-        return np.float64
+        return np.dtype(np.float64)
 
     @property
     def size(self) -> int:
@@ -158,7 +190,7 @@ class TestProtocols:
     def test_jax_function_is_not_part_of_the_protocol(self) -> None:
         """``jax.Array`` has no ``__jax_function__``, so the protocol must not require it."""
         assert not hasattr(jnp.ones(3), "__jax_function__")
-        assert "__jax_function__" not in JaxLike.__protocol_attrs__
+        assert "__jax_function__" not in get_protocol_members(JaxLike)
 
 
 class TestToJaxLike:
@@ -259,7 +291,9 @@ class TestWrappers:
     def test_average_with_weights(self) -> None:
         array = jnp.asarray([1.0, 2.0, 3.0])
         weights = jnp.asarray([1.0, 0.0, 1.0])
-        assert float(jax_average(array, weights=weights)) == pytest.approx(2.0)
+        averaged = jax_average(array, weights=weights)
+        assert isinstance(averaged, jax.Array)
+        assert float(averaged) == pytest.approx(2.0)
 
     def test_concatenate_and_stack_without_override(self) -> None:
         array = jnp.arange(3.0)
@@ -271,6 +305,70 @@ class TestWrappers:
         result = jax_concatenate([wrapper, wrapper])
         assert isinstance(result, _Wrapper)
         assert result.array.shape == (6,)
+
+    def test_override_can_change_wrapper_class_or_return_a_native_array(self) -> None:
+        class _ChangingWrapper(_Wrapper):
+            @classmethod
+            def __jax_function__(
+                cls, func, types, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None
+            ) -> object:
+                del cls, types
+                original = args[0]
+                assert isinstance(original, _ChangingWrapper)
+                if func is jax_copy:
+                    return _Wrapper(jnp.copy(original.array))
+                if func is jax_sum:
+                    return jnp.sum(original.array, **({} if kwargs is None else kwargs))
+                return NotImplemented
+
+        original = _ChangingWrapper(jnp.arange(3.0))
+        changed = assert_type(jax_copy(original), jax.Array | JaxLike[Any])
+        assert isinstance(changed, _Wrapper)
+        assert not isinstance(changed, _ChangingWrapper)
+        np.testing.assert_array_equal(changed.array, original.array)
+
+        unwrapped = assert_type(jax_sum(original), jax.Array | JaxLike[Any])
+        assert isinstance(unwrapped, jax.Array)
+        assert float(unwrapped) == pytest.approx(3.0)
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_dispatched_methods_do_not_promise_the_original_wrapper_type(self, native: bool) -> None:
+        class _ChangingWrapper(_Wrapper):
+            @classmethod
+            def __jax_function__(
+                cls, func, types, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None
+            ) -> object:
+                del cls, types
+                result = func(*(_unwrap(arg) for arg in args), **({} if kwargs is None else kwargs))
+                return result if native else _Wrapper(result)
+
+        type Result = JaxLike[Any] | jax.Array
+
+        original = _ChangingWrapper(jnp.arange(6.0).reshape(2, 3))
+        results = (
+            assert_type(original.T, Result),
+            assert_type(original.mT, Result),
+            assert_type(original.mH, Result),
+            assert_type(original.copy(), Result),
+            assert_type(original.reshape(3, 2), Result),
+            assert_type(original.transpose(), Result),
+            assert_type(original.ravel(), Result),
+            assert_type(original.flatten(), Result),
+            assert_type(original.squeeze(), Result),
+        )
+        for result in results:
+            if native:
+                assert isinstance(result, jax.Array)
+            else:
+                assert isinstance(result, _Wrapper)
+                assert not isinstance(result, _ChangingWrapper)
+
+        # Field mapping and synchronization do not dispatch on the outer wrapper.
+        assert isinstance(assert_type(original.astype(jnp.float32), _ChangingWrapper), _ChangingWrapper)
+        assert isinstance(assert_type(original.view(jnp.float32), _ChangingWrapper), _ChangingWrapper)
+        assert isinstance(assert_type(original.stop_gradient(), _ChangingWrapper), _ChangingWrapper)
+        assert isinstance(assert_type(original.to_device(jax.devices()[0]), _ChangingWrapper), _ChangingWrapper)
+        assert assert_type(original.block_until_ready(), _ChangingWrapper) is original
 
 
 class TestImplementationDefaults:
@@ -364,9 +462,25 @@ class TestImplementationDefaults:
         gradient = jax.grad(loss)(self._wrapper())
         np.testing.assert_allclose(np.asarray(gradient.array), np.ones((2, 3)))
 
-    def test_at_is_left_to_subclasses(self) -> None:
-        """Mirrors ``TorchLikeImplementation`` leaving ``__setitem__`` to its subclasses."""
-        assert not hasattr(JaxLikeImplementation, "at")
+    @pytest.mark.parametrize("attribute", sorted(JaxLikeImplementation.__abstractmethods__))
+    def test_representation_specific_members_must_be_implemented(self, attribute: str) -> None:
+        """Leaving any representation-specific member abstract prevents instantiation."""
+        member = vars(JaxLikeImplementation)[attribute]
+        assert member.__isabstractmethod__
+        incomplete = type("_IncompleteWrapper", (_Wrapper,), {attribute: member})
+        assert isabstract(incomplete)
+        assert incomplete.__abstractmethods__ == frozenset({attribute})
+        with pytest.raises(TypeError, match=attribute):
+            incomplete(jnp.ones(3))
+
+    @pytest.mark.parametrize("attribute", sorted(get_protocol_members(JaxLike)))
+    def test_protocol_members_are_implemented_or_explicitly_abstract(self, attribute: str) -> None:
+        owner = next(base for base in JaxLikeImplementation.__mro__ if attribute in vars(base))
+        assert not vars(owner).get("_is_protocol", False)
+
+    def test_complete_wrapper_satisfies_the_protocol(self) -> None:
+        assert not isabstract(_Wrapper)
+        assert isinstance(self._wrapper(), JaxLike)
 
 
 class TestPytreeRegistration:

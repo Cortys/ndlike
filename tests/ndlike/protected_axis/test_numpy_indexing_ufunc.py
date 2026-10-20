@@ -255,7 +255,7 @@ def test_ufunc_with_protected_out_writes_in_place() -> None:
     x = _SingleProtected(np.arange(6.0).reshape(2, 3))
     out = _SingleProtected(np.zeros((2, 3)))
 
-    result = np.add(x, 1.0, out=out)
+    result = np.add(x, 1.0, out=out)  # ty: ignore[no-matching-overload]
     # numpy returns ``(out,)`` from ufunc(__call__) when ``out`` is given.
     assert result == (out,) or result is out
     np.testing.assert_array_equal(out.array, x.array + 1.0)
@@ -276,7 +276,7 @@ def test_ufunc_with_tuple_out_for_single_field() -> None:
     x = _SingleProtected(np.arange(6.0).reshape(2, 3))
     out = _SingleProtected(np.zeros((2, 3)))
 
-    result = np.add(x, 1.0, out=(out,))
+    result = np.add(x, 1.0, out=(out,))  # ty: ignore[no-matching-overload]
     assert result == (out,)
     np.testing.assert_array_equal(out.array, x.array + 1.0)
 

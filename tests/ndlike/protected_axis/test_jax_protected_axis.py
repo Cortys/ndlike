@@ -247,8 +247,10 @@ def test_permitted_jax_average_reduced_only_batch_axes() -> None:
 
     averaged = jax_average(x, axis=0, weights=weights)
 
+    expected = jax_average(x.array, axis=0, weights=weights)
+    assert isinstance(expected, jax.Array)
     assert isinstance(averaged, ReductionArray)
-    assert jnp.allclose(averaged.array, jax_average(x.array, axis=0, weights=weights))
+    assert jnp.allclose(averaged.array, expected)
     assert averaged.shape == (3,)
     assert averaged.protected_shape == (4,)
 
@@ -260,6 +262,7 @@ def test_permitted_jax_average_expands_batch_shaped_weights_before_protected_axi
     averaged = jax_average(x, axis=-1, weights=weights)
 
     expected = jax_average(x.array, axis=1, weights=jnp.broadcast_to(weights[..., None], x.array.shape))
+    assert isinstance(expected, jax.Array)
     assert isinstance(averaged, ReductionArray)
     assert jnp.allclose(averaged.array, expected)
     assert averaged.shape == (2,)
@@ -427,10 +430,12 @@ def test_multi_field_index_and_assignment() -> None:
     assert tuple(y.second.shape) == (2,)
 
     x = x.at[0].set(PairArray(jnp.array([3.0, 4.0]), jnp.array([5.0, 6.0])))
+    assert isinstance(x, PairArray)
     assert jnp.array_equal(x.first[0], jnp.array([3.0, 4.0]))
     assert jnp.array_equal(x.second[0], jnp.array([5.0, 6.0]))
 
     x = x.at[1].set((jnp.array([7.0, 8.0]), jnp.array([9.0, 10.0])))
+    assert isinstance(x, PairArray)
     assert jnp.array_equal(x.first[1], jnp.array([7.0, 8.0]))
     assert jnp.array_equal(x.second[1], jnp.array([9.0, 10.0]))
 

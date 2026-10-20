@@ -111,7 +111,7 @@ def test_len_raises_for_zero_dim_distribution() -> None:
     assert x.shape == ()
     assert x.ndim == 0
 
-    with pytest.raises(TypeError, match="unsized distribution"):
+    with pytest.raises(TypeError, match="unsized object"):
         _ = len(x)
 
 
@@ -388,6 +388,6 @@ def test_reshape_method_uses_torch_function() -> None:
 def test_torch_function_classmethod_dispatches() -> None:
     """The class-level ``__torch_function__`` is the entry point for torch ops."""
     x = _SingleTensor(torch.arange(24.0).reshape(2, 3, 4))
-    y = torch.transpose(x, 0, 1)
+    y = torch.transpose(x, 0, 1)  # ty: ignore[invalid-argument-type]
     assert isinstance(y, _SingleTensor)
     assert tuple(y.tensor.shape) == (3, 2, 4)

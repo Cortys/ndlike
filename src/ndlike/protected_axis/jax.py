@@ -178,7 +178,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxOperatorsMixin, J
     @override
     def __len__(self) -> int:
         if self.ndim == 0:
-            msg = "len() of unsized distribution"
+            msg = "len() of unsized object"
             raise TypeError(msg)
         return len(cast("Any", self.protected_value()))
 
@@ -238,19 +238,19 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxOperatorsMixin, J
 
     @override
     @property
-    def mT(self) -> Self:
+    def mT(self) -> JaxLike[Any] | jax.Array:
         if self.ndim < 2:
             msg = "mT requires at least 2 batch dimensions."
             raise ValueError(msg)
-        return cast("Self", jax_swapaxes(cast("Any", self), -2, -1))
+        return jax_swapaxes(self, -2, -1)
 
     @override
     @property
-    def mH(self) -> Self:
+    def mH(self) -> JaxLike[Any] | jax.Array:
         if self.ndim < 2:
             msg = "mH requires at least 2 batch dimensions."
             raise ValueError(msg)
-        return cast("Self", jax_conj(cast("Any", self.mT)))
+        return jax_conj(self.mT)
 
     def _index_with_protected_axes(self, index: ToIndices, protected_axes_count: int) -> tuple[Any, ...]:
         index_tuple = index if isinstance(index, tuple) else (index,)
@@ -451,15 +451,15 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxOperatorsMixin, J
         return values
 
     @override
-    def reshape(self, *args: int | Sequence[int], order: str = "C") -> Self:
+    def reshape(self, *args: int | Sequence[int], order: str = "C") -> JaxLike[Any] | jax.Array:
         """Return a copy with reshaped protected values."""
         shape = cast("Sequence[int]", args[0] if len(args) == 1 and not isinstance(args[0], int) else args)
 
-        return cast("Self", jax_reshape(cast("Any", self), tuple(shape), order=order))
+        return jax_reshape(self, tuple(shape), order=order)
 
-    def take_along_axis(self, indices: jax.Array, axis: int = -1) -> Self:
+    def take_along_axis(self, indices: jax.Array, axis: int = -1) -> JaxLike[Any] | jax.Array:
         """Return a copy with gathered protected values along a batch dimension."""
-        return cast("Self", jax_take_along_axis(cast("Any", self), indices, axis))
+        return jax_take_along_axis(self, indices, axis)
 
 
 @dataclass(frozen=True, slots=True)

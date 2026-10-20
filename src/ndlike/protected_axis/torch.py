@@ -159,7 +159,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
     @override
     def __len__(self) -> int:
         if self.ndim == 0:
-            msg = "len() of unsized distribution"
+            msg = "len() of unsized object"
             raise TypeError(msg)
         return len(cast("Any", self.protected_value()))
 
@@ -228,7 +228,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
 
     @override
     @property
-    def mT(self) -> Self:
+    def mT(self) -> TorchLike[Any] | torch.Tensor:
         if self.ndim < 2:
             msg = "mT requires at least 2 batch dimensions."
             raise ValueError(msg)
@@ -236,11 +236,11 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
 
     @override
     @property
-    def mH(self) -> Self:
+    def mH(self) -> TorchLike[Any] | torch.Tensor:
         if self.ndim < 2:
             msg = "mH requires at least 2 batch dimensions."
             raise ValueError(msg)
-        return cast("Self", torch.adjoint(cast("Any", self)))
+        return torch.adjoint(self)  # ty: ignore[invalid-argument-type]
 
     def _index_with_protected_axes(self, index: ToIndices, protected_axes_count: int) -> tuple[Any, ...]:
         index_tuple = index if isinstance(index, tuple) else (index,)
@@ -375,13 +375,13 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
         }
         return self.with_protected_values(values)
 
-    def reshape(self, *shape: int | tuple[int, ...]) -> Self:
+    def reshape(self, *shape: int | tuple[int, ...]) -> TorchLike[Any] | torch.Tensor:
         """Return a copy with reshaped protected values."""
         if len(shape) == 1 and isinstance(shape[0], tuple):
             shape = shape[0]
 
-        return torch.reshape(self, shape)  # ty:ignore[invalid-return-type, invalid-argument-type]
+        return torch.reshape(self, shape)  # ty: ignore[invalid-argument-type]
 
-    def gather(self, dim: int, index: torch.Tensor) -> Self:
+    def gather(self, dim: int, index: torch.Tensor) -> TorchLike[Any] | torch.Tensor:
         """Return a copy with gathered protected values along a batch dimension."""
-        return torch.gather(self, dim, index)  # ty:ignore[no-matching-overload]
+        return torch.gather(self, dim, index)  # ty: ignore[invalid-argument-type]

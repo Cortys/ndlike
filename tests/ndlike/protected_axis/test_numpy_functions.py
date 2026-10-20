@@ -51,7 +51,7 @@ class TwoFieldArrayProtected(NumpyAxisProtected[np.ndarray]):
 def test_copy_with_subok_true_returns_protected_axis_copy() -> None:
     """``np.copy(..., subok=True)`` returns a new protected instance per field."""
     x = SingleArrayProtected(np.arange(6.0).reshape(2, 3))
-    y = np.copy(x, subok=True)
+    y = np.copy(x, subok=True)  # ty: ignore[no-matching-overload]
 
     assert isinstance(y, SingleArrayProtected)
     np.testing.assert_array_equal(y.array, x.array)
@@ -83,7 +83,7 @@ def test_copy_with_default_subok_rejects_multi_field() -> None:
 def test_astype_changes_dtype_per_field() -> None:
     """``np.astype`` changes each protected field's dtype and preserves its layout."""
     x = SingleArrayProtected(np.ones((2, 3), dtype=np.float64))
-    result = np.astype(x, np.float32)
+    result = np.astype(x, np.float32)  # ty: ignore[no-matching-overload]
     assert isinstance(result, SingleArrayProtected)
     assert result.array.dtype == np.float32
     assert result.shape == x.shape
@@ -303,7 +303,7 @@ def test_moveaxis_with_int_arguments() -> None:
     """``np.moveaxis`` with int args moves a single batch axis."""
     x = SingleArrayProtected(np.arange(24.0).reshape(2, 3, 4))
 
-    y = np.moveaxis(x, 0, 1)
+    y = np.moveaxis(x, 0, 1)  # ty: ignore[invalid-argument-type]
     assert isinstance(y, SingleArrayProtected)
     assert y.array.shape == (3, 2, 4)
 
@@ -312,7 +312,7 @@ def test_moveaxis_with_tuple_arguments() -> None:
     """``np.moveaxis`` with tuple args moves multiple batch axes."""
     x = SingleArrayProtected(np.arange(24.0).reshape(2, 3, 4))
 
-    y = np.moveaxis(x, (0, 1), (1, 0))
+    y = np.moveaxis(x, (0, 1), (1, 0))  # ty: ignore[invalid-argument-type]
     assert isinstance(y, SingleArrayProtected)
     assert y.array.shape == (3, 2, 4)
 
@@ -386,7 +386,7 @@ def test_reduction_with_protected_out_writes_into_buffer() -> None:
     x = SingleArrayProtected(np.arange(24.0).reshape(2, 3, 4))
     out = SingleArrayProtected(np.zeros((4,)))
 
-    result = np.sum(x, axis=(0, 1), out=out)
+    result = np.sum(x, axis=(0, 1), out=out)  # ty: ignore[no-matching-overload]
     np.testing.assert_array_equal(out.array, np.sum(x.array, axis=(0, 1)))
     assert result is out
 
@@ -407,7 +407,7 @@ def test_reduction_with_mismatched_out_layout_raises() -> None:
     bad_out = TwoFieldArrayProtected(np.zeros((4,)), np.zeros((4,)))
 
     with pytest.raises(ValueError, match="same protected_axes layout"):
-        _ = np.sum(x, axis=(0, 1), out=bad_out)
+        _ = np.sum(x, axis=(0, 1), out=bad_out)  # ty: ignore[no-matching-overload]
 
 
 def test_reduction_rejects_non_protected_out_for_multi_field() -> None:
@@ -534,7 +534,7 @@ def test_len_raises_for_zero_dim_representation() -> None:
     assert x.shape == ()
     assert x.ndim == 0
 
-    with pytest.raises(TypeError, match="unsized representation"):
+    with pytest.raises(TypeError, match="unsized object"):
         _ = len(x)
 
 

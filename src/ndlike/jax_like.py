@@ -34,11 +34,14 @@ from ndlike.jax_functions import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
+    from types import ModuleType
 
     from jax.sharding import Sharding
     from jax.typing import DTypeLike
-    from numpy.typing import DTypeLike as NpDTypeLike, NDArray
+    from numpy.typing import ArrayLike as NpArrayLike, DTypeLike as NpDTypeLike, NDArray
+
+    from ndlike.array_like import ToIndices
 
 
 @runtime_checkable
@@ -63,7 +66,18 @@ class JaxLike[DT](ArrayLike[DT], Protocol):
     Every member declared here also exists on a real ``jax.Array``, otherwise
     ``isinstance(jnp.ones(3), JaxLike)`` would silently be False. That rules out
     ``__jax_function__``, which is declared on :class:`JaxLikeImplementation` instead.
+
+    Dispatched operations may return another JaxLike implementation or a native
+    array, rather than preserving the concrete wrapper class.
     """
+
+    @property
+    def T(self) -> JaxLike[Any] | jax.Array:  # noqa: N802
+        """Return a transposed array."""
+
+    @property
+    def mT(self) -> JaxLike[Any] | jax.Array:  # noqa: N802
+        """Return an array with its last two axes transposed."""
 
     @property
     def at(self) -> Any:  # noqa: ANN401
@@ -87,22 +101,22 @@ class JaxLike[DT](ArrayLike[DT], Protocol):
     ) -> Self:
         """Return a copy of the array cast to the given data type."""
 
-    def copy(self) -> Self:
+    def copy(self) -> JaxLike[Any] | jax.Array:
         """Return a copy of the array."""
 
-    def reshape(self, *args: int | Sequence[int], order: str = "C") -> Self:
+    def reshape(self, *args: int | Sequence[int], order: str = "C") -> JaxLike[Any] | jax.Array:
         """Return a reshaped version of the array."""
 
-    def ravel(self, order: str = "C") -> Self:
+    def ravel(self, order: str = "C") -> JaxLike[Any] | jax.Array:
         """Return a flattened version of the array."""
 
-    def flatten(self, order: str = "C") -> Self:
+    def flatten(self, order: str = "C") -> JaxLike[Any] | jax.Array:
         """Return a flattened version of the array."""
 
-    def squeeze(self, axis: int | Sequence[int] | None = None) -> Self:
+    def squeeze(self, axis: int | Sequence[int] | None = None) -> JaxLike[Any] | jax.Array:
         """Return the array with axes of length one removed."""
 
-    def transpose(self, *args: int | Sequence[int] | None) -> Self:
+    def transpose(self, *args: int | Sequence[int] | None) -> JaxLike[Any] | jax.Array:
         """Return a transposed version of the array."""
 
     def view(self, dtype: DTypeLike | None = None, type: None = None) -> Self:  # noqa: A002
@@ -115,7 +129,7 @@ class JaxLike[DT](ArrayLike[DT], Protocol):
         """Return the array as a (nested) Python list."""
 
 
-class JaxLikeImplementation[DT](ArrayLike[DT], ABC):
+class JaxLikeImplementation[DT](JaxLike[DT], ABC):
     """ABC implementation for array-like objects that behave like JAX arrays.
 
     Subclasses only have to implement ``__jax_function__`` plus the few members that cannot be
@@ -128,7 +142,69 @@ class JaxLikeImplementation[DT](ArrayLike[DT], ABC):
 
     ``at``, the JAX stand-in for ``__setitem__``, is left to subclasses: an indexed update has no
     single meaning across fields with different batch semantics.
+
+    Representation-specific indexing, metadata, namespace access, ``at``, ``sharding`` and
+    ``devices`` are explicitly abstract rather than inherited as protocol placeholders.
     """
+
+    @abstractmethod
+    def __getitem__(self, index: ToIndices, /) -> Any:  # noqa: ANN401
+        """Return values selected by index."""
+
+    @abstractmethod
+    def __setitem__(self, index: ToIndices, value: NpArrayLike, /) -> None:
+        """Set values selected by index."""
+
+    @abstractmethod
+    def __array_namespace__(self, /, *, api_version: str | None = None) -> ModuleType:
+        """Return the array namespace."""
+
+    @abstractmethod
+    def __len__(self) -> int:
+        """Return the length along the first axis."""
+
+    @abstractmethod
+    def __iter__(self) -> Iterator[Any]:
+        """Iterate over the first axis."""
+
+    @property
+    @abstractmethod
+    def dtype(self) -> Any:  # noqa: ANN401
+        """Data type of the array."""
+
+    @property
+    @abstractmethod
+    def device(self) -> Any:  # noqa: ANN401
+        """Device of the array."""
+
+    @property
+    @abstractmethod
+    def ndim(self) -> int:
+        """Number of dimensions."""
+
+    @property
+    @abstractmethod
+    def shape(self) -> tuple[int, ...]:
+        """Shape of the array."""
+
+    @property
+    @abstractmethod
+    def size(self) -> int:
+        """Number of elements in the array."""
+
+    @property
+    @abstractmethod
+    def at(self) -> Any:  # noqa: ANN401
+        """Return the subclass-specific indexed update helper."""
+
+    @property
+    @abstractmethod
+    def sharding(self) -> Any:  # noqa: ANN401
+        """Return the sharding of the underlying array."""
+
+    @abstractmethod
+    def devices(self) -> set[jax.Device]:
+        """Return the devices containing the underlying array."""
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Register concrete subclasses as JAX pytree nodes.
@@ -300,21 +376,21 @@ class JaxLikeImplementation[DT](ArrayLike[DT], ABC):
         return self._map_array_fields(lambda child: jax.device_put(child, device))
 
     @property
-    def T(self) -> Self:  # noqa: N802
+    def T(self) -> JaxLike[Any] | jax.Array:  # noqa: N802
         """Inverts the order of the axes of the underlying array."""
-        return jax_transpose(self)  # ty: ignore[invalid-return-type, invalid-argument-type]
+        return jax_transpose(self)
 
     @property
-    def mT(self) -> Self:  # noqa: N802
+    def mT(self) -> JaxLike[Any] | jax.Array:  # noqa: N802
         """The version of the underlying array with its last two axes swapped."""
-        return jax_matrix_transpose(self)  # ty: ignore[invalid-return-type, invalid-argument-type]
+        return jax_matrix_transpose(self)
 
     @property
-    def mH(self) -> Self:  # noqa: N802
+    def mH(self) -> JaxLike[Any] | jax.Array:  # noqa: N802
         """The adjoint (conjugate) transposed version of the underlying array."""
-        return jax_conj(self.mT)  # ty: ignore[invalid-return-type, invalid-argument-type]
+        return jax_conj(self.mT)
 
-    def reshape(self, *args: int | Sequence[int], order: str = "C") -> Self:
+    def reshape(self, *args: int | Sequence[int], order: str = "C") -> JaxLike[Any] | jax.Array:
         """Return a reshaped version of the array.
 
         Args:
@@ -325,9 +401,9 @@ class JaxLikeImplementation[DT](ArrayLike[DT], ABC):
             The reshaped array.
         """
         shape = args[0] if len(args) == 1 and not isinstance(args[0], int) else args
-        return jax_reshape(self, shape, order)  # ty: ignore[invalid-return-type, invalid-argument-type]
+        return jax_reshape(self, shape, order)  # ty: ignore[no-matching-overload]
 
-    def transpose(self, *args: int | Sequence[int] | None) -> Self:
+    def transpose(self, *args: int | Sequence[int] | None) -> JaxLike[Any] | jax.Array:
         """Return a transposed version of the array.
 
         Args:
@@ -338,11 +414,11 @@ class JaxLikeImplementation[DT](ArrayLike[DT], ABC):
             The transposed array.
         """
         if len(args) == 0:
-            return jax_transpose(self)  # ty: ignore[invalid-return-type, invalid-argument-type]
+            return jax_transpose(self)
         axes = args[0] if len(args) == 1 and not isinstance(args[0], int) else args
-        return jax_transpose(self, axes)  # ty: ignore[invalid-return-type, invalid-argument-type]
+        return jax_transpose(self, axes)  # ty: ignore[invalid-argument-type]
 
-    def ravel(self, order: str = "C") -> Self:
+    def ravel(self, order: str = "C") -> JaxLike[Any] | jax.Array:
         """Return a flattened version of the array.
 
         Args:
@@ -351,9 +427,9 @@ class JaxLikeImplementation[DT](ArrayLike[DT], ABC):
         Returns:
             The flattened array.
         """
-        return jax_reshape(self, (-1,), order)  # ty: ignore[invalid-return-type, invalid-argument-type]
+        return jax_reshape(self, (-1,), order)
 
-    def flatten(self, order: str = "C") -> Self:
+    def flatten(self, order: str = "C") -> JaxLike[Any] | jax.Array:
         """Return a flattened version of the array.
 
         Args:
@@ -364,7 +440,7 @@ class JaxLikeImplementation[DT](ArrayLike[DT], ABC):
         """
         return self.ravel(order)
 
-    def squeeze(self, axis: int | Sequence[int] | None = None) -> Self:
+    def squeeze(self, axis: int | Sequence[int] | None = None) -> JaxLike[Any] | jax.Array:
         """Return the array with axes of length one removed.
 
         Args:
@@ -373,11 +449,11 @@ class JaxLikeImplementation[DT](ArrayLike[DT], ABC):
         Returns:
             The squeezed array.
         """
-        return jax_squeeze(self, axis)  # ty: ignore[invalid-return-type, invalid-argument-type]
+        return jax_squeeze(self, axis)
 
-    def copy(self) -> Self:
+    def copy(self) -> JaxLike[Any] | jax.Array:
         """Return a copy of the array."""
-        return jax_copy(self)  # ty: ignore[invalid-return-type, invalid-argument-type]
+        return jax_copy(self)
 
     def view(self, dtype: DTypeLike | None = None, type: None = None) -> Self:  # noqa: A002
         """Return a bit-cast view of the array.

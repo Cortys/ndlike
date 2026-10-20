@@ -5,10 +5,10 @@ from __future__ import annotations
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Protocol, cast, overload
 
+from flextype import switchdispatch
 import numpy as np
 import torch
 
-from ndlike._switchdispatch import switchdispatch
 from ndlike.protected_axis._common_functions import (
     AxisProtectedCreator,
     AxisProtectedInternals,

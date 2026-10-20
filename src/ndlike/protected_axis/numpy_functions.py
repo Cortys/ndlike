@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+from flextype import switchdispatch
 import numpy as np
 
-from ndlike._switchdispatch import switchdispatch
 from ndlike.array_like import NumpyLike
 from ndlike.protected_axis._common_functions import (
     AxisProtectedCreator,

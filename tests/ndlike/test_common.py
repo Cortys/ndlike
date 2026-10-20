@@ -19,7 +19,6 @@ class BlockBackends(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, BlockBackends())
 import ndlike
 import ndlike.array_like
-import ndlike._switchdispatch
 import ndlike.protected_axis
 import ndlike.protected_axis._common_functions
 import ndlike.protected_axis.numpy

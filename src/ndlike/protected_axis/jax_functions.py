@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+from flextype import switchdispatch
 import jax
 from jax import numpy as jnp
 import numpy as np
 
 from ndlike import jax_functions as jf
-from ndlike._switchdispatch import switchdispatch
 from ndlike.jax_functions import (
     jax_astype,
     jax_average,

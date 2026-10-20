@@ -30,14 +30,14 @@ wheels = [
 
 [[package]]
 name = "flextype"
-version = "0.2.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/41/7f/6de996e04570aa0cef54dbdc8531891865a88c59a5cca978f85e28e565f9/flextype-0.2.0.tar.gz", hash = "sha256:f139a8fa87255ec827db8bfc5a31737d7544048b9a33bcdba12deb39ff6cbfc7", size = 25450, upload-time = "2026-10-19T21:44:02.538Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/37/993b3a61a1f6febd183957b27e1f6812b31d05f69031ac5f8aed3ae2c04d/flextype-0.3.0.tar.gz", hash = "sha256:2b83852bbe269bc61e51d7cae1f9f3b09b9b32b29659867f17670d9e52d901ec", size = 34479, upload-time = "2026-10-20T21:00:02.628Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/48/65/538ba74cf8621966e87300405398a92d2961650f6525addde7e66fe49d97/flextype-0.2.0-py3-none-any.whl", hash = "sha256:230db60540d794370e2a9a064d86af57b74d19e833338889c4c772ef10ae276e", size = 24875, upload-time = "2026-10-19T21:44:01.154Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/11/6477ce871bfead7b198d6d6650c5e3bc080009ee20c3a53462a5d3fd479e/flextype-0.3.0-py3-none-any.whl", hash = "sha256:01e2c6603bbb18ab62cd23ea54c214d521043836a62280e6949868ecbef8e3e8", size = 33268, upload-time = "2026-10-20T21:00:01.292Z" },
 ]
 
 [[package]]
@@ -285,7 +285,7 @@ wheels = [
 
 [[package]]
 name = "ndlike"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "flextype" },
@@ -320,7 +320,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flextype", specifier = ">=0.2.0" },
+    { name = "flextype", specifier = ">=0.3.0" },
     { name = "jax", marker = "extra == 'jax'", specifier = ">=0.8.1" },
     { name = "numpy", specifier = ">=2.1.0" },
     { name = "torch", marker = "sys_platform == 'darwin' and extra == 'torch'", specifier = ">=2.6.0" },
@@ -623,13 +623,13 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform == 'darwin'",
 ]
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "jinja2" },
-    { name = "networkx" },
-    { name = "setuptools" },
-    { name = "sympy" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "sys_platform == 'darwin'" },
+    { name = "fsspec", marker = "sys_platform == 'darwin'" },
+    { name = "jinja2", marker = "sys_platform == 'darwin'" },
+    { name = "networkx", marker = "sys_platform == 'darwin'" },
+    { name = "setuptools", marker = "sys_platform == 'darwin'" },
+    { name = "sympy", marker = "sys_platform == 'darwin'" },
+    { name = "typing-extensions", marker = "sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4b/3c/379349820e9a6e713826de3d0b88f07728541bdcabe2a3afd128871cdc4b/torch-2.14.1-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:420dbf314c180ee4b86e9bc00aee5746a7d6e5bacdd7df925af671ed393f0b2e", size = 127307099, upload-time = "2026-09-30T17:44:10.421Z" },
@@ -648,13 +648,13 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'darwin'",
 ]
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "jinja2" },
-    { name = "networkx" },
-    { name = "setuptools" },
-    { name = "sympy" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "sys_platform != 'darwin'" },
+    { name = "fsspec", marker = "sys_platform != 'darwin'" },
+    { name = "jinja2", marker = "sys_platform != 'darwin'" },
+    { name = "networkx", marker = "sys_platform != 'darwin'" },
+    { name = "setuptools", marker = "sys_platform != 'darwin'" },
+    { name = "sympy", marker = "sys_platform != 'darwin'" },
+    { name = "typing-extensions", marker = "sys_platform != 'darwin'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.14.1%2Bcpu-cp312-cp312-linux_s390x.whl", hash = "sha256:6b06a7f6275c5fdecaf1dbf5546f0820b024a97785575bb99e3d9930d83cd86b", upload-time = "2026-09-30T19:47:30Z" },

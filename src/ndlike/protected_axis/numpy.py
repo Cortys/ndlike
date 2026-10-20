@@ -12,8 +12,8 @@ import numpy as np
 from ndlike.array_like import (
     ArrayAPIVersion,
     ArrayFlagsLike,
-    NumpyArrayLike,
-    NumpyArrayLikeImplementation,
+    NumpyLike,
+    NumpyLikeImplementation,
     Order,
     ToIndices,
 )
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from numpy.typing import DTypeLike
 
 
-type NumpyProtectedValue = NumpyArrayLike[Any] | np.ndarray
+type NumpyProtectedValue = NumpyLike[Any] | np.ndarray
 
 
 def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
@@ -43,7 +43,7 @@ def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
         raise ValueError(msg)
 
 
-class NumpyAxisProtected[T: NumpyArrayLike | np.ndarray](NumpyArrayLikeImplementation[T], ABC):
+class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], ABC):
     """ABC for representations with one or multiple protected array-like fields."""
 
     protected_axes: ClassVar[dict[str, int]] = {}
@@ -506,7 +506,7 @@ class NumpyAxisProtected[T: NumpyArrayLike | np.ndarray](NumpyArrayLikeImplement
 
     def reshape(
         self, *shape: int | tuple[int, ...], order: str = "C", copy: bool | None = None
-    ) -> NumpyArrayLike[Any] | np.ndarray:
+    ) -> NumpyLike[Any] | np.ndarray:
         """Return a copy with reshaped protected values."""
         if len(shape) == 1 and isinstance(shape[0], tuple):
             shape = shape[0]

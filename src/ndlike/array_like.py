@@ -194,15 +194,15 @@ class ArrayLike[DT](ArrayLikeWithoutSize[DT], Protocol):
 
 
 @runtime_checkable
-class NumpyArrayLikeConvertible[DT](ArrayLike[DT], Protocol):
+class NumpyLikeConvertible[DT](ArrayLike[DT], Protocol):
     """Protocol for array-like objects that can be converted to numpy arrays."""
 
-    def __array_like__(self, dtype: DTypeLike | None = None, /, *, copy: bool | None = None) -> NumpyArrayLike[Any]:
-        """Convert to a NumpyArrayLike."""
+    def __array_like__(self, dtype: DTypeLike | None = None, /, *, copy: bool | None = None) -> NumpyLike[Any]:
+        """Convert to a NumpyLike."""
 
 
 @runtime_checkable
-class NumpyArrayLike[DT](ArrayLike[DT], Protocol):
+class NumpyLike[DT](ArrayLike[DT], Protocol):
     """Protocol for array-like objects that implement NumPy-specific APIs."""
 
     @property
@@ -222,17 +222,17 @@ class NumpyArrayLike[DT](ArrayLike[DT], Protocol):
         """Handle numpy array functions."""
 
     @property
-    def mT(self) -> NumpyArrayLike[Any] | np.ndarray:  # noqa: N802
+    def mT(self) -> NumpyLike[Any] | np.ndarray:  # noqa: N802
         """Matrix-transposed view."""
 
     @property
-    def T(self) -> NumpyArrayLike[Any] | np.ndarray:  # noqa: N802
+    def T(self) -> NumpyLike[Any] | np.ndarray:  # noqa: N802
         """Transposed view."""
 
-    def transpose(self, *axes: int | None) -> NumpyArrayLike[Any] | np.ndarray:
+    def transpose(self, *axes: int | None) -> NumpyLike[Any] | np.ndarray:
         """Return transposed array."""
 
-    def copy(self, order: Order = "C") -> NumpyArrayLike[Any] | np.ndarray:
+    def copy(self, order: Order = "C") -> NumpyLike[Any] | np.ndarray:
         """Return array copy."""
 
     def astype(
@@ -242,7 +242,7 @@ class NumpyArrayLike[DT](ArrayLike[DT], Protocol):
         casting: Literal["no", "equiv", "safe", "same_kind", "unsafe"] = "unsafe",
         subok: bool = True,
         copy: bool = True,
-    ) -> NumpyArrayLike[Any] | np.ndarray:
+    ) -> NumpyLike[Any] | np.ndarray:
         """Return cast array."""
 
     @property
@@ -250,9 +250,7 @@ class NumpyArrayLike[DT](ArrayLike[DT], Protocol):
         """The flags of the array."""
 
 
-class NumpyArrayLikeImplementation[DT: NumpyArrayLike | np.ndarray](
-    ArrayLike[DT], np.lib.mixins.NDArrayOperatorsMixin, ABC
-):
+class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.mixins.NDArrayOperatorsMixin, ABC):
     """ABC implementation for array-like objects that behave like NumPy arrays.
 
     Representation-specific conversion and metadata are explicitly abstract rather
@@ -288,7 +286,7 @@ class NumpyArrayLikeImplementation[DT: NumpyArrayLike | np.ndarray](
     def size(self) -> int:
         """Number of elements in the array."""
 
-    def __getitem__(self: Self, index: ToIndices, /) -> NumpyArrayLikeImplementation[DT] | DT:
+    def __getitem__(self: Self, index: ToIndices, /) -> NumpyLikeImplementation[DT] | DT:
         """Return a new array containing the indexed values."""
         msg = f"{type(self).__name__} does not support indexing."
         raise NotImplementedError(msg)
@@ -339,16 +337,16 @@ class NumpyArrayLikeImplementation[DT: NumpyArrayLike | np.ndarray](
         """
 
     @property
-    def mT(self) -> NumpyArrayLike[Any] | np.ndarray:  # noqa: N802
+    def mT(self) -> NumpyLike[Any] | np.ndarray:  # noqa: N802
         """The transposed version of the underlying array."""
         return np.matrix_transpose(self)
 
     @property
-    def T(self) -> NumpyArrayLike[Any] | np.ndarray:  # noqa: N802
+    def T(self) -> NumpyLike[Any] | np.ndarray:  # noqa: N802
         """The transposed version of the underlying array."""
         return np.transpose(self)
 
-    def transpose(self, *axes: int | None) -> NumpyArrayLike[Any] | np.ndarray:
+    def transpose(self, *axes: int | None) -> NumpyLike[Any] | np.ndarray:
         """Return a transposed version of the NumpySample.
 
         This method implicitly also provides full axis tracking support for
@@ -368,7 +366,7 @@ class NumpyArrayLikeImplementation[DT: NumpyArrayLike | np.ndarray](
             return np.transpose(self, axes[0])
         return np.transpose(self, axes)  # ty:ignore[no-matching-overload]
 
-    def copy(self, order: Order = "C") -> NumpyArrayLike[Any] | np.ndarray:
+    def copy(self, order: Order = "C") -> NumpyLike[Any] | np.ndarray:
         """Return a copy of the array."""
         return np.copy(self, order=order, subok=True)  # ty:ignore[no-matching-overload]
 
@@ -379,7 +377,7 @@ class NumpyArrayLikeImplementation[DT: NumpyArrayLike | np.ndarray](
         casting: Literal["no", "equiv", "safe", "same_kind", "unsafe"] = "unsafe",
         subok: bool = True,
         copy: bool = True,
-    ) -> NumpyArrayLike[Any] | np.ndarray:
+    ) -> NumpyLike[Any] | np.ndarray:
         """Copy of the array, cast to a specified type."""
         if order != "K" or casting != "unsafe" or not subok:
             msg = "Non-default ndarray.astype options require a representation-specific implementation."
@@ -438,17 +436,17 @@ class NumpyArrayLikeImplementation[DT: NumpyArrayLike | np.ndarray](
         return self
 
 
-NumpyArrayLikeImplementation.register(np.ndarray)
+NumpyLikeImplementation.register(np.ndarray)
 
 
 @flexdispatch
-def to_numpy_array_like[DT](
+def to_numpy_like[DT](
     array: object,
     *,
     dtype: DTypeLike | None = None,
     copy: bool | None = None,
-) -> NumpyArrayLike[Any] | np.ndarray:
-    """Convert an ArrayLike to a NumpyArrayLike.
+) -> NumpyLike[Any] | np.ndarray:
+    """Convert an ArrayLike to a NumpyLike.
 
     If possible, use the __array_like__ method to convert the array, otherwise use np.asanyarray.
 
@@ -463,11 +461,11 @@ def to_numpy_array_like[DT](
     return np.asanyarray(array, dtype=dtype, copy=copy)
 
 
-@to_numpy_array_like.register(NumpyArrayLikeConvertible)
-def _to_numpy_array_like_convertible(
-    array: NumpyArrayLikeConvertible,
+@to_numpy_like.register(NumpyLikeConvertible)
+def _to_numpy_like_convertible(
+    array: NumpyLikeConvertible,
     *,
     dtype: DTypeLike | None = None,
     copy: bool | None = None,
-) -> NumpyArrayLike[Any] | NDArray[Any]:
+) -> NumpyLike[Any] | NDArray[Any]:
     return array.__array_like__(dtype, copy=copy)

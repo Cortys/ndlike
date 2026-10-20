@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 
 from ndlike._switchdispatch import switchdispatch
-from ndlike.array_like import NumpyArrayLike
+from ndlike.array_like import NumpyLike
 from ndlike.protected_axis._common_functions import (
     AxisProtectedCreator,
     AxisProtectedInternals,
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from inspect import BoundArguments
 
 
-type NumpyProtectedValue = NumpyArrayLike[Any] | np.ndarray
+type NumpyProtectedValue = NumpyLike[Any] | np.ndarray
 
 
 type NumpyAxisProtectedCreator = AxisProtectedCreator[NumpyProtectedValue, Any]

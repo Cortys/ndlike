@@ -1,14 +1,15 @@
 # ndlike
 
-A toolkit for defining custom array types on top of NumPy, PyTorch, and JAX.
+NumPy arrays, JAX arrays, and PyTorch tensors provide similar primitives for
+indexing, reshaping, stacking, and numerical operations. `ndlike` provides tools
+to build wrappers around these types that behave like the underlying arrays,
+but whose elements represent custom composite values—such as vectors or
+distributions—instead of individual numbers.
 
-Use `ndlike` when your objects contain arrays but represent more than raw numbers:
-vectors, distributions, or other structured values. It provides protocols and
-reusable base classes so these objects can expose familiar indexing, shape
-operations, and backend function dispatch without reimplementing the plumbing.
-Protected axes separate batch dimensions from each value's internal dimensions,
-letting you reshape or stack collections without changing what an individual
-value represents.
+Protocols and reusable base classes handle array interfaces and backend function
+dispatch. Protected axes distinguish collection dimensions from each element's
+internal dimensions, so indexing, reshaping, or stacking a collection preserves
+the structure of its elements.
 
 ## Installation
 
@@ -32,20 +33,26 @@ interface without NumPy/JAX's integer `size` property, since Torch uses a method
 
 Backend-specific APIs build on these protocols:
 
-| Module | Protocol | Implementation base | Conversion |
+| Module | Protocol | Conversion helper | Conversion hook |
 | --- | --- | --- | --- |
-| `ndlike.array_like` | `NumpyArrayLike` | `NumpyArrayLikeImplementation` | `to_numpy_array_like` |
-| `ndlike.torch_like` | `TorchLike` | `TorchLikeImplementation` | `to_torch_like` |
-| `ndlike.jax_like` | `JaxLike` | `JaxLikeImplementation` | `to_jax_like` |
+| `ndlike.array_like` | `NumpyLike` | `to_numpy_like` | `__array_like__` |
+| `ndlike.torch_like` | `TorchLike` | `to_torch_like` | `__torch_like__` |
+| `ndlike.jax_like` | `JaxLike` | `to_jax_like` | `__jax_like__` |
 
-Use protocols to type array-like inputs, or subclass an implementation base to
+Each module also provides matching `Implementation` and `Convertible` classes,
+such as `NumpyLikeImplementation` and `NumpyLikeConvertible`.
+
+Use the array protocols to type inputs, or subclass an implementation base to
 reuse convenience methods while supplying your representation's metadata and
-dispatch hooks. NumPy uses `__array_function__` / `__array_ufunc__`, Torch uses
-`__torch_function__`, and ndlike supplies `__jax_function__` for JAX.
+operation-dispatch hooks. NumPy uses `__array_function__` / `__array_ufunc__`,
+Torch uses `__torch_function__`, and ndlike supplies `__jax_function__` for JAX.
 
-The conversion helpers honor custom `__array_like__`, `__torch_like__`, or
-`__jax_like__` hooks before falling back to native backend conversion. This lets
-custom types preserve their structure instead of always becoming raw arrays.
+Conversion helpers call the conversion hook when an input satisfies the matching
+convertible protocol: the core array interface plus the hook, not the hook alone.
+This lets custom types preserve their structure instead of becoming raw arrays.
+Otherwise, the helpers fall back to `numpy.asanyarray`, `torch.as_tensor`, and
+`jax.numpy.asarray`, respectively. NumPy retains `__array_like__` for backward
+compatibility and consistency with NumPy's `__array__`.
 
 ## Protected axes
 

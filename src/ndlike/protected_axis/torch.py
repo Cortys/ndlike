@@ -189,13 +189,6 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
 
     @override
     @property
-    def ndim(self) -> int:
-        primary_name = type(self).primary_protected_name()
-        axes = type(self).protected_axes[primary_name]
-        return len(batch_shape(value_shape(self.protected_value()), axes))
-
-    @override
-    @property
     def shape(self) -> tuple[int, ...]:
         primary_name = type(self).primary_protected_name()
         axes = type(self).protected_axes[primary_name]
@@ -207,24 +200,6 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
         primary_name = type(self).primary_protected_name()
         axes = type(self).protected_axes[primary_name]
         return protected_shape(value_shape(self.protected_value()), axes)
-
-    @overload
-    def size(self, dim: int) -> int: ...
-
-    @overload
-    def size(self, dim: None = ...) -> torch.Size: ...
-
-    @override
-    def size(self, dim: int | None = None) -> int | torch.Size:
-        if dim is None:
-            return torch.Size(self.shape)
-
-        normalized_dim = dim + self.ndim if dim < 0 else dim
-        if normalized_dim < 0 or normalized_dim >= self.ndim:
-            msg = f"dim {dim} out of bounds for batch dimensions with ndim {self.ndim}."
-            raise IndexError(msg)
-
-        return self.shape[normalized_dim]
 
     @override
     @property

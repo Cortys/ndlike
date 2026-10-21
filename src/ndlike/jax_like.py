@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from contextlib import suppress
 from dataclasses import fields, is_dataclass
 from inspect import isabstract
+import math
 from typing import TYPE_CHECKING, Any, Protocol, Self, override, runtime_checkable
 
 from flextype import flexdispatch
@@ -178,9 +179,9 @@ class JaxLikeImplementation[DT](JaxLike[DT], ABC):
         """Device of the array."""
 
     @property
-    @abstractmethod
     def ndim(self) -> int:
         """Number of dimensions."""
+        return len(self.shape)
 
     @property
     @abstractmethod
@@ -188,9 +189,9 @@ class JaxLikeImplementation[DT](JaxLike[DT], ABC):
         """Shape of the array."""
 
     @property
-    @abstractmethod
     def size(self) -> int:
         """Number of elements in the array."""
+        return math.prod(self.shape)
 
     @property
     @abstractmethod

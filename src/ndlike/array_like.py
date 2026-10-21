@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Sequence
+import math
 from types import EllipsisType, ModuleType
 from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, SupportsIndex, override, runtime_checkable
 
@@ -272,9 +273,9 @@ class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.
         """Device of the array."""
 
     @property
-    @abstractmethod
     def ndim(self) -> int:
         """Number of dimensions."""
+        return len(self.shape)
 
     @property
     @abstractmethod
@@ -282,9 +283,9 @@ class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.
         """Shape of the array."""
 
     @property
-    @abstractmethod
     def size(self) -> int:
         """Number of elements in the array."""
+        return math.prod(self.shape)
 
     def __getitem__(self: Self, index: ToIndices, /) -> NumpyLikeImplementation[DT] | DT:
         """Return a new array containing the indexed values."""

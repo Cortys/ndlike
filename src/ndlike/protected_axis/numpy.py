@@ -236,13 +236,6 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
 
     @override
     @property
-    def ndim(self) -> int:
-        primary_name = type(self).primary_protected_name()
-        axes = type(self).protected_axes[primary_name]
-        return len(batch_shape(value_shape(self.protected_value()), axes))
-
-    @override
-    @property
     def shape(self) -> tuple[int, ...]:
         primary_name = type(self).primary_protected_name()
         axes = type(self).protected_axes[primary_name]
@@ -254,11 +247,6 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
         primary_name = type(self).primary_protected_name()
         axes = type(self).protected_axes[primary_name]
         return protected_shape(value_shape(self.protected_value()), axes)
-
-    @override
-    @property
-    def size(self) -> int:
-        return int(np.prod(self.shape)) if self.shape else 1
 
     @override
     @property

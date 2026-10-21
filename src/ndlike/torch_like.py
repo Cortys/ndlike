@@ -142,9 +142,9 @@ class TorchLikeImplementation[DT](TorchLike[DT], ABC):
         """Device of the array."""
 
     @property
-    @abstractmethod
     def ndim(self) -> int:
         """Number of dimensions."""
+        return len(self.shape)
 
     @property
     @abstractmethod
@@ -172,9 +172,17 @@ class TorchLikeImplementation[DT](TorchLike[DT], ABC):
     @overload
     def size(self, dim: None = ...) -> torch.Size: ...
 
-    @abstractmethod
     def size(self, dim: int | None = None) -> int | torch.Size:
         """Return the size of the array along the given dimension."""
+        if dim is None:
+            return torch.Size(self.shape)
+
+        normalized_dim = dim + self.ndim if dim < 0 else dim
+        if normalized_dim < 0 or normalized_dim >= self.ndim:
+            msg = f"dim {dim} out of bounds for dimensions with ndim {self.ndim}."
+            raise IndexError(msg)
+
+        return self.shape[normalized_dim]
 
     @overload
     def to(

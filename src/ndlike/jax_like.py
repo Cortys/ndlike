@@ -33,6 +33,7 @@ from ndlike.jax_functions import (
     jax_squeeze,
     jax_transpose,
 )
+from ndlike.jax_operators import JaxOperatorsMixin
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
@@ -130,15 +131,13 @@ class JaxLike[DT](ArrayLike[DT], Protocol):
         """Return the array as a (nested) Python list."""
 
 
-class JaxLikeImplementation[DT](JaxLike[DT], ABC):
+class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
     """ABC implementation for array-like objects that behave like JAX arrays.
 
-    Subclasses only have to implement ``__jax_function__`` plus the few members that cannot be
-    expressed generically. Every concrete method below routes through the wrappers in
-    :mod:`ndlike.jax_functions` and thus back into ``__jax_function__``.
-
-    Dataclass subclasses retain inherited array equality unless they explicitly
-    define ``__eq__``. Hashing follows ordinary dataclass rules.
+    Subclasses implement ``__jax_function__`` plus the representation-specific members.
+    Operators and dispatched methods route through :mod:`ndlike.jax_functions` and thus
+    back into ``__jax_function__``. Dataclass subclasses retain inherited array equality
+    unless they explicitly define ``__eq__``. Hashing follows ordinary dataclass rules.
 
     Concrete (non-abstract) subclasses are additionally registered as JAX pytree nodes, which makes
     ``jax.jit``, ``jax.vmap``, ``jax.grad`` and ``jax.tree`` work on them. This does not replace the

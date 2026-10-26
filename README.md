@@ -112,7 +112,8 @@ use wrappers from `ndlike.jax_functions`, such as `jax_reshape`, `jax_stack`, an
 `__jax_function__` on custom types and call JAX normally for native arrays.
 `jax_function_dispatch` lets you add the same dispatch behavior to your own
 functions. `JaxLikeImplementation` also provides dataclass-based pytree support
-for JAX transformations such as `jax.jit` and `jax.vmap`.
+for JAX transformations such as `jax.jit` and `jax.vmap`, and
+arithmetic operators that dispatch through the same wrappers.
 
 ## Development
 

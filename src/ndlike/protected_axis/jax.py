@@ -18,7 +18,6 @@ from ndlike.jax_functions import (
     jax_take_along_axis,
 )
 from ndlike.jax_like import JaxLike, JaxLikeImplementation
-from ndlike.jax_operators import JaxOperatorsMixin
 from ndlike.protected_axis._common_functions import (
     batch_shape,
     protected_shape,
@@ -46,7 +45,7 @@ def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
         raise ValueError(msg)
 
 
-class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxOperatorsMixin, JaxLikeImplementation[J], ABC):
+class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementation[J], ABC):
     """ABC for representations with protected jax-like fields and optional NumPy sidecars.
 
     Arithmetic is opt-in through ``permitted_functions``, using probly's ``jax_*``

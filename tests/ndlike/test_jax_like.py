@@ -514,3 +514,42 @@ class TestPytreeRegistration:
         wrapper = _Optional(jnp.arange(3.0))
         children, _ = wrapper.tree_flatten()
         assert children[-1] is None
+
+
+class TestGenericOperators:
+    @pytest.mark.parametrize("other", [2, np.array([2.0, 3.0]), jnp.array([2.0, 3.0])])
+    def test_base_class_provides_binary_and_reflected_operators(self, other):
+        x = _Wrapper(jnp.array([1.0, 4.0]))
+        for result, expected in [
+            (x + other, x.array + other),
+            (other + x, other + x.array),
+            (x * other, x.array * other),
+            (other * x, other * x.array),
+            (other - x, other - x.array),
+        ]:
+            assert isinstance(result, _Wrapper)
+            np.testing.assert_array_equal(result.array, expected)
+
+    def test_generic_operators_compose_with_jit_vmap_and_grad(self):
+        x = _Wrapper(jnp.arange(6.0).reshape(2, 3))
+        transformed = jax.jit(jax.vmap(lambda value: value * value + 1))(x)
+        np.testing.assert_array_equal(transformed.array, x.array**2 + 1)
+        gradient = jax.grad(lambda value: jnp.sum((value * value).array))(x)
+        np.testing.assert_array_equal(gradient.array, 2 * x.array)
+
+    def test_unsupported_binary_operators_preserve_python_fallback(self):
+        class _Denied(_Wrapper):
+            @classmethod
+            def __jax_function__(cls, func, types, args=(), kwargs=None):  # noqa: ANN206
+                del cls, func, types, args, kwargs
+                return NotImplemented
+
+        class _Reflected:
+            def __radd__(self, other) -> str:
+                del other
+                return "reflected"
+
+        x = _Denied(jnp.ones(3))
+        assert x + _Reflected() == "reflected"
+        with pytest.raises(TypeError):
+            _ = x * 2

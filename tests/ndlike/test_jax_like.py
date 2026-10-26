@@ -866,18 +866,30 @@ class TestNumpyUfuncCoercion:
 
 
 class TestGenericOperators:
+    @pytest.mark.parametrize("op", [operator.add, operator.sub, operator.mul, operator.truediv, operator.pow])
+    @pytest.mark.parametrize("scalar", [False, True])
+    def test_numpy_left_operand_is_not_forced_to_defer(self, op, scalar):
+        x = _Wrapper(jnp.array([1.0, 2.0]))
+        other = np.float64(3) if scalar else np.array([3.0, 4.0])
+        result = op(other, x)
+        assert isinstance(result, _Wrapper if scalar else np.ndarray)
+        np.testing.assert_allclose(np.asarray(result), op(other, np.asarray(x)))
+
     @pytest.mark.parametrize("other", [2, np.array([2.0, 3.0]), jnp.array([2.0, 3.0])])
     def test_base_class_provides_binary_and_reflected_operators(self, other):
         x = _Wrapper(jnp.array([1.0, 4.0]))
-        for result, expected in [
-            (x + other, x.array + other),
-            (other + x, other + x.array),
-            (x * other, x.array * other),
-            (other * x, other * x.array),
-            (other - x, other - x.array),
-        ]:
-            assert isinstance(result, _Wrapper)
-            np.testing.assert_array_equal(result.array, expected)
+        for index, (result, expected) in enumerate(
+            [
+                (x + other, x.array + other),
+                (other + x, other + x.array),
+                (x * other, x.array * other),
+                (other * x, other * x.array),
+                (other - x, other - x.array),
+            ]
+        ):
+            numpy_left = isinstance(other, np.ndarray) and index in (1, 3, 4)
+            assert isinstance(result, np.ndarray if numpy_left else _Wrapper)
+            np.testing.assert_array_equal(np.asarray(result), expected)
 
     def test_generic_operators_compose_with_jit_vmap_and_grad(self):
         x = _Wrapper(jnp.arange(6.0).reshape(2, 3))

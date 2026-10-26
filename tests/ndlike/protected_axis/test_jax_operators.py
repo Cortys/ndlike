@@ -88,8 +88,12 @@ def test_binary_operators_and_reflections(op, wrapper, backend, kind):
         (other, x, backend(raw, x.array)),
     ):
         result = op(left, right)
-        assert isinstance(result, Numeric)
-        np.testing.assert_allclose(result.array, expected)
+        if isinstance(left, np.ndarray):
+            assert isinstance(result, np.ndarray)
+            np.testing.assert_allclose(result, expected)
+        else:
+            assert isinstance(result, Numeric)
+            np.testing.assert_allclose(result.array, expected)
         np.testing.assert_allclose(wrapper(left, right).array, expected)
     np.testing.assert_array_equal(x.array, [[2, 3], [4, 5]])
 

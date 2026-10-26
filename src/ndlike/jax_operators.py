@@ -70,8 +70,8 @@ class JaxOperatorsMixin:  # noqa: PLW1641
     Subclasses can define ``__array_ufunc__`` to override or disable that behavior.
     """
 
-    # Prefer reflected operators in mixed NumPy infix expressions.
-    __array_priority__ = 1000
+    # Let NumPy handle its own infix operations without forced deferral.
+    __array_priority__ = 0
 
     __add__ = _binary(jf.jax_add)
     __radd__ = _binary(jf.jax_add, reflected=True)

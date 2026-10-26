@@ -303,6 +303,16 @@ def test_numpy_representation_handles_mixed_infix_operations(op, reflected):
         torch.add(x, other)  # ty: ignore[invalid-argument-type]
 
 
+@pytest.mark.parametrize("op", [operator.add, operator.sub, operator.mul, operator.truediv, operator.pow])
+@pytest.mark.parametrize("scalar", [False, True])
+def test_numpy_left_operand_is_not_forced_to_defer(op, scalar):
+    x = _Tensor(torch.tensor([1.0, 2.0]))
+    other = np.float64(3) if scalar else np.array([3.0, 4.0])
+    result = op(other, x)
+    assert isinstance(result, _Tensor if scalar else np.ndarray)
+    np.testing.assert_allclose(np.asarray(result), op(other, np.asarray(x)))
+
+
 def test_operand_check_does_not_coerce_foreign_objects_or_accept_non_callable_overrides():
     class Foreign:
         __torch_function__ = None

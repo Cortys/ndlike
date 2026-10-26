@@ -112,8 +112,44 @@ use wrappers from `ndlike.jax_functions`, such as `jax_reshape`, `jax_stack`, an
 `__jax_function__` on custom types and call JAX normally for native arrays.
 `jax_function_dispatch` lets you add the same dispatch behavior to your own
 functions. `JaxLikeImplementation` also provides dataclass-based pytree support
-for JAX transformations such as `jax.jit` and `jax.vmap`, and
+for JAX transformations such as `jax.jit`, `jax.vmap`, and `jax.grad`, and
 arithmetic operators that dispatch through the same wrappers.
+
+### Explicit JAX representation fields
+
+General `JaxLikeImplementation` subclasses must declare their dynamic fields:
+
+```python
+pytree_children: ClassVar[tuple[str, ...]] = ("array",)
+```
+
+The declaration is inherited and its order is preserved. Extend it explicitly
+when a subclass adds dynamic fields. Selection never depends on a field's value,
+shape, or whether it currently contains `None`. `JaxAxisProtected` declares its
+protected fields automatically, using `protected_axes` order.
+
+Default pytree traversal requires JAX-backed dynamic array fields. NumPy arrays
+are rejected, including numeric arrays and arrays nested in child containers;
+array-valued static metadata is also unsupported. This prevents silent backend
+conversion or freezing. Mixed representations support eager operations, but
+cannot be traversed by `jit`, `grad`, `vmap`, or native tree utilities with this
+default layout.
+
+### Mapping arrays versus their components
+
+Native `jax.tree.map` traverses registered representations structurally. It does
+not invoke the outer wrapper's operators or preserve its semantic invariants.
+Use `jax_tree_map` when the function should receive whole custom arrays:
+
+```python
+from ndlike.jax_like import jax_tree_map
+
+# x is a JaxLikeImplementation with multiplication support.
+mapped = jax_tree_map(lambda value: value * 2, {"values": x})
+```
+
+`JaxLikeImplementation` is opaque to this helper by default. A class can set
+`tree_map_traverse: ClassVar[bool] = True` to request structural traversal.
 
 ## Development
 

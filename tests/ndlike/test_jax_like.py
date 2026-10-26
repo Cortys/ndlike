@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from inspect import isabstract
-from typing import Any, assert_type
+from typing import Any, ClassVar, Self, assert_type
 from typing_extensions import get_protocol_members
 
 import numpy as np
@@ -22,6 +22,7 @@ from ndlike.jax_functions import (
     jax_concatenate,
     jax_copy,
     jax_mean,
+    jax_multiply,
     jax_reshape,
     jax_stack,
     jax_std,
@@ -32,6 +33,7 @@ from ndlike.jax_like import (
     JaxLike,
     JaxLikeConvertible,
     JaxLikeImplementation,
+    jax_tree_map,
     to_jax_like,
 )
 
@@ -50,6 +52,7 @@ class _Wrapper(JaxLikeImplementation[jax.Array]):
 
     array: jax.Array
     label: str = "wrapped"
+    pytree_children: ClassVar[tuple[str, ...]] = ("array",)
 
     @classmethod
     def __jax_function__(cls, func, types, args=(), kwargs=None):  # noqa: ANN206
@@ -510,10 +513,265 @@ class TestPytreeRegistration:
         @dataclass(frozen=True)
         class _Optional(_Wrapper):
             weights: jax.Array | None = None
+            pytree_children: ClassVar[tuple[str, ...]] = ("array", "weights")
 
         wrapper = _Optional(jnp.arange(3.0))
         children, _ = wrapper.tree_flatten()
         assert children[-1] is None
+
+    @pytest.mark.parametrize(
+        ("declaration", "error", "message"),
+        [
+            (None, TypeError, "must declare pytree_children"),
+            (["array"], TypeError, "tuple of non-empty field names"),
+            ((1,), TypeError, "tuple of non-empty field names"),
+            (("",), TypeError, "tuple of non-empty field names"),
+            (("array", "array"), ValueError, "must not repeat"),
+            (("missing",), ValueError, "unknown fields: missing"),
+        ],
+    )
+    def test_invalid_child_declarations(self, declaration, error, message):
+        cls = type("_InvalidSchema", (_Wrapper,), {"pytree_children": declaration})
+        with pytest.raises(error, match=message):
+            jax.tree.leaves(cls(jnp.ones(3)))
+
+    def test_missing_declaration_is_not_inferred(self):
+        class _Undeclared(JaxLikeImplementation[Any]):
+            pass
+
+        with pytest.raises(TypeError, match="must declare pytree_children"):
+            _Undeclared._pytree_child_names()  # noqa: SLF001
+
+    def test_non_dataclasses_need_an_explicit_stored_field_layout(self):
+        class _Manual(JaxLikeImplementation[Any]):
+            pass
+
+        with pytest.raises(TypeError, match="must be a dataclass or override"):
+            _Manual._pytree_field_names()  # noqa: SLF001
+
+    def test_child_order_and_placeholder_values_are_stable(self):
+        @dataclass(frozen=True, slots=True, eq=False)
+        class _Pair(_Wrapper):
+            weights: jax.Array | None = None
+            pytree_children: ClassVar[tuple[str, ...]] = ("weights", "array")
+
+        original = _Pair(jnp.ones(3), weights=jnp.zeros(3))
+        children, aux = original.tree_flatten()
+        assert children[0] is original.weights
+        assert children[1] is original.array
+        placeholders = (object(), object())
+        rebuilt = _Pair.tree_unflatten(aux, placeholders)
+        rebuilt_children, rebuilt_aux = rebuilt.tree_flatten()
+        assert all(left is right for left, right in zip(rebuilt_children, placeholders, strict=True))
+        assert rebuilt_aux == aux
+
+    def test_scalar_children_participate_in_autodiff(self):
+        @dataclass(frozen=True, eq=False)
+        class _Scaled(_Wrapper):
+            scale: float = 2.0
+            pytree_children: ClassVar[tuple[str, ...]] = ("array", "scale")
+
+        x = _Scaled(jnp.arange(3.0))
+        gradient = jax.grad(lambda value: jnp.sum(value.array) * value.scale)(x)
+        np.testing.assert_array_equal(gradient.array, [2.0, 2.0, 2.0])
+        assert float(gradient.scale) == pytest.approx(3.0)
+
+    @pytest.mark.parametrize(
+        "container",
+        [
+            pytest.param(lambda value: value, id="direct"),
+            pytest.param(lambda value: [value], id="list"),
+            pytest.param(lambda value: {"nested": (jnp.ones(2), value)}, id="nested-dict-tuple"),
+        ],
+    )
+    def test_numpy_arrays_in_dynamic_fields_are_rejected_recursively(self, container):
+        @dataclass(frozen=True, eq=False)
+        class _WithPayload(_Wrapper):
+            payload: Any = None
+            pytree_children: ClassVar[tuple[str, ...]] = ("array", "payload")
+
+        x = _WithPayload(jnp.ones(3), payload=container(np.ones(2)))
+        with pytest.raises(TypeError, match=r"_WithPayload\.payload contains a NumPy array"):
+            jax.tree.leaves(x)
+
+    def test_nested_implementations_reject_their_own_numpy_fields(self):
+        @dataclass(frozen=True, eq=False)
+        class _Nested(_Wrapper):
+            array: Any
+
+        array: Any = np.ones(3)
+        x = _Nested(_Wrapper(array))
+        with pytest.raises(TypeError, match=r"_Wrapper\.array contains a NumPy array"):
+            jax.jit(lambda value: value)(x)
+
+    def test_registered_child_containers_cannot_hide_numpy_arrays(self):
+        @jax.tree_util.register_pytree_node_class
+        @dataclass(frozen=True)
+        class _Container:
+            value: Any
+
+            def tree_flatten(self):
+                return (self.value,), None
+
+            @classmethod
+            def tree_unflatten(cls, aux_data, children) -> Self:
+                del aux_data
+                return cls(children[0])
+
+        @dataclass(frozen=True, eq=False)
+        class _WithPayload(_Wrapper):
+            payload: Any = None
+            pytree_children: ClassVar[tuple[str, ...]] = ("array", "payload")
+
+        x = _WithPayload(jnp.ones(3), payload=_Container(np.ones(2)))
+        with pytest.raises(TypeError, match=r"_WithPayload\.payload contains a NumPy array"):
+            jax.tree.leaves(x)
+
+    def test_numpy_scalars_remain_supported_dynamic_numbers(self):
+        @dataclass(frozen=True, eq=False)
+        class _Scaled(_Wrapper):
+            scale: Any = None
+            pytree_children: ClassVar[tuple[str, ...]] = ("array", "scale")
+
+        x = _Scaled(jnp.ones(3), scale=np.float32(2))
+        result = jax.jit(lambda value: jnp.sum(value.array) * value.scale)(x)
+        assert float(result) == pytest.approx(6.0)
+
+    @pytest.mark.parametrize("compiled", [False, True])
+    def test_jax_float0_cotangents_can_be_repackaged_and_traversed(self, compiled):
+        gradient_function = jax.grad(lambda value: jnp.sum(value.array.astype(jnp.float32)), allow_int=True)
+        if compiled:
+            gradient_function = jax.jit(gradient_function)
+        gradient = gradient_function(_Wrapper(jnp.arange(3, dtype=jnp.int32), "integer"))
+        assert gradient.array.dtype == jax.dtypes.float0
+        assert gradient.label == "integer"
+        leaves = jax.tree.leaves(gradient)
+        assert len(leaves) == 1
+        assert leaves[0] is gradient.array
+
+    def test_shaped_and_none_metadata_are_not_children(self):
+        @dataclass(frozen=True)
+        class _ShapeMetadata:
+            shape: tuple[int, ...] = (37,)
+
+        @dataclass(frozen=True, slots=True, eq=False)
+        class _WithMetadata(_Wrapper):
+            metadata: _ShapeMetadata = field(default_factory=_ShapeMetadata)
+            optional_metadata: None = None
+
+        x = _WithMetadata(jnp.arange(6.0).reshape(2, 3))
+        assert len(x.tree_flatten()[0]) == 1
+        mapped = jax.jit(jax.vmap(lambda value: value))(x)
+        assert mapped.metadata is x.metadata
+        assert mapped.optional_metadata is None
+        np.testing.assert_array_equal(mapped.array, x.array)
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [np.ones(2), jnp.ones(2), [], {}, set(), (np.ones(2),)],
+    )
+    def test_unsupported_static_metadata_reports_the_field(self, metadata):
+        @dataclass(frozen=True, eq=False)
+        class _WithMetadata(_Wrapper):
+            metadata: Any = None
+
+        x = _WithMetadata(jnp.ones(3), metadata=metadata)
+        with pytest.raises(TypeError, match=r"_WithMetadata\.metadata must be static, hashable metadata"):
+            jax.tree.leaves(x)
+
+    def test_array_metadata_is_rejected_even_with_an_identity_hash(self):
+        class _HashableArray(np.ndarray):
+            __hash__ = object.__hash__  # ty:ignore[invalid-assignment]
+
+        @dataclass(frozen=True, eq=False)
+        class _WithMetadata(_Wrapper):
+            metadata: Any = None
+
+        x = _WithMetadata(jnp.ones(3), metadata=np.ones(2).view(_HashableArray))
+        with pytest.raises(TypeError, match="without JAX/NumPy arrays"):
+            x.tree_flatten()
+
+    def test_changing_static_metadata_retraces(self):
+        traced_labels = []
+
+        @jax.jit
+        def labeled_sum(value):
+            traced_labels.append(value.label)
+            return jnp.sum(value.array)
+
+        array = jnp.ones(3)
+        assert float(labeled_sum(_Wrapper(array, "one"))) == 3.0
+        assert float(labeled_sum(_Wrapper(array * 2, "one"))) == 6.0
+        assert float(labeled_sum(_Wrapper(array, "two"))) == 3.0
+        assert traced_labels == ["one", "two"]
+
+    def test_explicitly_empty_children_are_allowed(self):
+        @dataclass(frozen=True, eq=False)
+        class _Static(_Wrapper):
+            array: Any = None
+            pytree_children: ClassVar[tuple[str, ...]] = ()
+
+        original = _Static(label="static")
+        assert jax.tree.leaves(original) == []
+        rebuilt = jax.jit(lambda value: value)(original)
+        assert rebuilt.array is None
+        assert rebuilt.label == "static"
+
+    def test_custom_flattening_does_not_require_the_default_schema(self):
+        class _Custom(_Wrapper):
+            pytree_children: ClassVar[Any] = None
+
+            def tree_flatten(self):
+                return (self.array,), self.label
+
+            @classmethod
+            def tree_unflatten(cls, aux_data, children) -> Self:
+                return cls(children[0], aux_data)
+
+        original = _Custom(jnp.arange(3.0), "custom")
+        rebuilt = jax.jit(lambda value: value)(original)
+        assert isinstance(rebuilt, _Custom)
+        assert rebuilt.label == "custom"
+        np.testing.assert_array_equal(rebuilt.array, original.array)
+
+    def test_dataclass_post_init_is_skipped_for_transforms_and_invalid_gradients(self):
+        constructed = []
+
+        @dataclass(frozen=True, slots=True, eq=False)
+        class _Positive(_Wrapper):
+            derived: str = field(init=False, default="checked")
+
+            def __post_init__(self) -> None:
+                constructed.append("post_init")
+                if bool(jnp.any(self.array <= 0)):
+                    msg = "primal must be positive"
+                    raise ValueError(msg)
+
+        x = _Positive(jnp.ones((2, 3)), "positive")
+        identity = jax.jit(jax.vmap(lambda value: value))(x)
+        assert identity.derived == "checked"
+        gradient = jax.jit(jax.grad(lambda value: -jnp.sum(value.array)))(x)
+        assert type(gradient) is _Positive
+        assert gradient.label == "positive"
+        assert gradient.derived == "checked"
+        np.testing.assert_array_equal(gradient.array, -np.ones((2, 3)))
+        assert constructed == ["post_init"]
+        with pytest.raises(ValueError, match="primal must be positive"):
+            _Positive(gradient.array)
+
+    def test_custom_init_is_skipped(self):
+        constructed = []
+
+        class _CheckedInit(_Wrapper):
+            def __init__(self, array, label="checked") -> None:
+                constructed.append("init")
+                super().__init__(array, label)
+
+        x = _CheckedInit(jnp.ones(3))
+        gradient = jax.grad(lambda value: -jnp.sum(value.array))(x)
+        assert isinstance(gradient, _CheckedInit)
+        np.testing.assert_array_equal(gradient.array, -np.ones(3))
+        assert constructed == ["init"]
 
 
 class TestGenericOperators:
@@ -553,3 +811,165 @@ class TestGenericOperators:
         assert x + _Reflected() == "reflected"
         with pytest.raises(TypeError):
             _ = x * 2
+
+
+class TestRepresentationFields:
+    def test_immutable_copy_hooks_cannot_cause_in_place_updates(self):
+        class _Immutable(_Wrapper):
+            def __copy__(self) -> Self:
+                return self
+
+        x = _Immutable(jnp.ones(3))
+        converted = x.astype(jnp.int32)
+        assert converted is not x
+        assert converted.array.dtype == jnp.int32
+        assert x.array.dtype == jnp.float32
+
+    def test_convenience_methods_do_not_use_pytree_overrides_or_validate_metadata(self):
+        @dataclass(frozen=True, slots=True, eq=False)
+        class _CustomTree(_Wrapper):
+            metadata: Any = None
+
+            def tree_flatten(self):
+                msg = "array methods must not flatten the representation"
+                raise AssertionError(msg)
+
+            @classmethod
+            def tree_unflatten(cls, aux_data, children) -> Self:
+                del cls, aux_data, children
+                msg = "array methods must not unflatten the representation"
+                raise AssertionError(msg)
+
+        metadata = np.arange(5.0)
+        x = _CustomTree(jnp.arange(3.0), metadata=metadata)
+        for mapped in (x.astype(jnp.int32), x.view(jnp.int32), x.stop_gradient(), x.to_device(jax.devices()[0])):
+            assert type(mapped) is _CustomTree
+            assert mapped.metadata is metadata
+        assert x.block_until_ready() is x
+
+    def test_representation_fields_can_be_selected_independently(self):
+        @dataclass(frozen=True, eq=False)
+        class _DifferentFields(_Wrapper):
+            other: Any = None
+
+            @classmethod
+            def _array_field_names(cls) -> tuple[str, ...]:
+                del cls
+                return ("other",)
+
+        x = _DifferentFields(jnp.ones(3), other=jnp.ones(5))
+        converted = x.astype(jnp.int32)
+        assert converted.array is x.array
+        assert converted.other.dtype == jnp.int32
+
+    def test_optional_array_fields_are_preserved(self):
+        @dataclass(frozen=True, eq=False)
+        class _Optional(_Wrapper):
+            weights: jax.Array | None = None
+            pytree_children: ClassVar[tuple[str, ...]] = ("array", "weights")
+
+        x = _Optional(jnp.ones(3))
+        assert x.astype(jnp.int32).weights is None
+        assert x.stop_gradient().weights is None
+        assert x.block_until_ready() is x
+
+    def test_nested_convenience_methods_respect_the_inner_representation(self):
+        @dataclass(frozen=True, slots=True, eq=False)
+        class _Inner(_Wrapper):
+            metadata: Any = None
+
+            def tree_flatten(self):
+                msg = "array methods must not flatten nested representations"
+                raise AssertionError(msg)
+
+        @dataclass(frozen=True, eq=False)
+        class _Outer(_Wrapper):
+            array: Any
+
+        metadata = np.ones(5)
+        inner = _Inner(jnp.ones(3), metadata=metadata)
+        outer = _Outer(inner)
+        for mapped in (outer.stop_gradient(), outer.view(jnp.int32), outer.to_device(jax.devices()[0])):
+            assert type(mapped.array) is _Inner
+            assert mapped.array.metadata is metadata
+        assert outer.block_until_ready() is outer
+
+
+class _AdditiveMultiply(_Wrapper):
+    """Distinguish custom multiplication from structural leaf multiplication."""
+
+    @classmethod
+    def __jax_function__(cls, func, types, args=(), kwargs=None):  # noqa: ANN206
+        if func is jax_multiply:
+            return cls(jnp.add(*(_unwrap(arg) for arg in args)))
+        return super().__jax_function__(func, types, args, kwargs)
+
+
+class TestJaxTreeMap:
+    def test_opaque_mapping_uses_custom_operators(self):
+        x = _AdditiveMultiply(jnp.array([1.0, 3.0]))
+        mapped = jax_tree_map(lambda value: value * 2, {"value": x, "array": jnp.array([2.0])})
+        assert isinstance(mapped["value"], _AdditiveMultiply)
+        np.testing.assert_array_equal(mapped["value"].array, [3.0, 5.0])
+        np.testing.assert_array_equal(mapped["array"], [4.0])
+        structural = jax.tree.map(lambda value: value * 2, x)
+        np.testing.assert_array_equal(structural.array, [2.0, 6.0])
+
+    def test_class_flag_requests_structural_traversal(self):
+        class _Traversable(_AdditiveMultiply):
+            tree_map_traverse: ClassVar[bool] = True
+
+        mapped = jax_tree_map(lambda value: value * 2, _Traversable(jnp.array([1.0, 3.0])))
+        assert isinstance(mapped, _Traversable)
+        np.testing.assert_array_equal(mapped.array, [2.0, 6.0])
+
+    @pytest.mark.parametrize("class_traverse", [False, True])
+    @pytest.mark.parametrize("call_traverse", [False, True])
+    def test_per_call_traversal_overrides_the_class_flag(self, class_traverse, call_traverse):
+        cls = type("_Configurable", (_AdditiveMultiply,), {"tree_map_traverse": class_traverse})
+        mapped = jax_tree_map(lambda value: value * 2, cls(jnp.array([1.0, 3.0])), traverse_jaxlikes=call_traverse)
+        np.testing.assert_array_equal(mapped.array, [2.0, 6.0] if call_traverse else [3.0, 5.0])
+
+    def test_leaf_predicate_takes_precedence(self):
+        x = _AdditiveMultiply(jnp.array([1.0, 3.0]))
+        mapped = jax_tree_map(
+            lambda value: value * 2,
+            x,
+            traverse_jaxlikes=True,
+            is_leaf=lambda value: isinstance(value, _AdditiveMultiply),
+        )
+        np.testing.assert_array_equal(mapped.array, [3.0, 5.0])
+        assert jax_tree_map(len, [x], is_leaf=lambda value: isinstance(value, list)) == 1
+
+    def test_multiple_trees_can_have_different_metadata_at_opaque_nodes(self):
+        left = {"value": _Wrapper(jnp.array([1.0]), "left")}
+        right = {"value": _Wrapper(jnp.array([3.0]), "right")}
+        mapped = jax_tree_map(lambda x, y: x + y, left, right)
+        np.testing.assert_array_equal(mapped["value"].array, [4.0])
+
+    def test_nested_implementations_use_their_own_flags(self):
+        @dataclass(frozen=True, eq=False)
+        class _Outer(_Wrapper):
+            array: Any
+            tree_map_traverse: ClassVar[bool] = True
+
+        inner = _Wrapper(jnp.ones(3))
+        seen = []
+
+        def visit(value):
+            seen.append(value)
+            return value
+
+        mapped = jax_tree_map(visit, _Outer(inner))
+        assert len(seen) == 1
+        assert seen[0] is inner
+        assert mapped.array is inner
+
+    def test_helper_composes_with_jit_and_grad(self):
+        def loss(value):
+            mapped = jax_tree_map(lambda leaf: leaf * leaf, {"value": value})
+            return jnp.sum(mapped["value"].array)
+
+        x = _Wrapper(jnp.arange(3.0))
+        gradient = jax.jit(jax.grad(loss))(x)
+        np.testing.assert_array_equal(gradient.array, 2 * x.array)

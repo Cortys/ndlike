@@ -56,6 +56,11 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
     must satisfy the relation, except inequality, which tests whether any differ.
     Matrix multiplication acts on visible batch axes independently at each
     protected coordinate. NumPy sidecars are not supported by these operators.
+
+    Protected fields are automatically declared as pytree children; other
+    dataclass fields are static metadata, subject to JAX's static-data rules.
+    NumPy sidecars are eager-only: default pytree traversal rejects them rather
+    than converting, freezing, or independently batching them.
     """
 
     protected_axes: ClassVar[dict[str, int]] = {}
@@ -88,6 +93,12 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
             msg = f"{cls.__name__}.permitted_functions must be a set of callables."
             raise TypeError(msg)
         cls.permitted_functions = set(permitted_functions)
+        cls.pytree_children = tuple(axes)
+
+    @classmethod
+    def _array_field_names(cls) -> tuple[str, ...]:
+        """Select protected representation fields independently of pytree overrides."""
+        return tuple(cls.protected_axes)
 
     @classmethod
     def primary_protected_name(cls) -> str:

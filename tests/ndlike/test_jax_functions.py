@@ -68,6 +68,8 @@ if TYPE_CHECKING:
         assert_type(jf.jax_floor_divide(array, 2), jax.Array)
         assert_type(jf.jax_remainder(array, 2), jax.Array)
         assert_type(jf.jax_divmod(array, 2), tuple[jax.Array, jax.Array])
+        assert_type(jf.jax_frexp(array), tuple[jax.Array, jax.Array])
+        assert_type(jf.jax_modf(array), tuple[jax.Array, jax.Array])
         assert_type(jf.jax_power(array, 2), jax.Array)
         assert_type(jf.jax_matmul(array, array), jax.Array)
         assert_type(jf.jax_bitwise_and(array, 1), jax.Array)
@@ -89,6 +91,8 @@ if TYPE_CHECKING:
         assert_type(jf.jax_add(1, custom), Result)
         assert_type(jf.jax_equal(custom, array), Result)
         assert_type(jf.jax_divmod(custom, array), tuple[Result, Result])
+        assert_type(jf.jax_frexp(custom), tuple[Result, Result])
+        assert_type(jf.jax_modf(custom), tuple[Result, Result])
         assert_type(jf.jax_negative(custom), Result)
         assert_type(jf.jax_reshape(array, (2, 3)), jax.Array)
         assert_type(jf.jax_transpose(array), jax.Array)
@@ -136,6 +140,10 @@ if TYPE_CHECKING:
         assert_type(jf.jax_average(array, weights=custom), Result | tuple[Result, Result])
         assert_type(jf.jax_add(1, 2), jax.Array)
         assert_type(jf.jax_add(numpy, numpy), jax.Array)
+        assert_type(jf.jax_frexp(numpy), tuple[jax.Array, jax.Array])
+        assert_type(jf.jax_modf(numpy), tuple[jax.Array, jax.Array])
+        assert_type(jf.jax_frexp(1.5), tuple[jax.Array, jax.Array])
+        assert_type(jf.jax_modf(1.5), tuple[jax.Array, jax.Array])
         assert_type(jf.jax_copy(numpy), jax.Array)
         assert_type(jf.jax_copy(1), jax.Array)
         assert_type(jf.jax_stack([numpy, numpy]), jax.Array)
@@ -295,6 +303,12 @@ def test_sequence_wrappers_keep_public_identity(func):
     assert types == (RecordingOverride,)
     assert args[0] is arrays
     assert kwargs == {"axis": 0}
+
+
+@pytest.mark.parametrize("func", [jf.jax_frexp, jf.jax_modf])
+def test_multi_output_unary_wrappers_dispatch(func):
+    value = RecordingOverride()
+    assert func(value) == (func, (RecordingOverride,), (value,), {})
 
 
 def test_subclass_precedence_and_not_implemented_fallback():

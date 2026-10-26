@@ -377,7 +377,9 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
             else:
                 out_values.append(None)
 
-        if out is not None and len(protected_axes) != 1 and any(values is None for values in out_values):
+        if len(protected_axes) != 1 and any(
+            item is not None and values is None for item, values in zip(out_items, out_values, strict=True)
+        ):
             msg = "non-protected out is only supported for single-field protected objects."
             raise TypeError(msg)
 
@@ -398,7 +400,8 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
                 raise TypeError(msg)
             return normalize_axis(axis, batch_ndim)
 
-        results: dict[str, NumpyProtectedValue] = {}
+        output_count = ufunc.nout if method == "__call__" else 1
+        results: list[dict[str, NumpyProtectedValue]] = [{} for _ in range(output_count)]
         for name, axes_count in protected_axes.items():
             field_kwargs = dict(kwargs)
 
@@ -445,43 +448,49 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
 
             result = getattr(ufunc, method)(*field_input_items, **field_kwargs)
 
-            if out is not None:
+            result_items = result if output_count > 1 else (result,)
+            for index, result_item in enumerate(result_items):
+                if out is not None and out_items[index] is not None:
+                    continue
+
+                item = result_item
+                if axes_count == 0 and not hasattr(item, "ndim"):
+                    item = np.asarray(item)
+
+                result_ndim = value_ndim(item)
+                result_shape = value_shape(item)
+                original_shape = value_shape(self_values[name])
+                if result_ndim < axes_count:
+                    msg = f"Ufunc operation removed protected trailing axes for field {name!r}."
+                    raise ValueError(msg)
+                if protected_shape(result_shape, axes_count) != protected_shape(original_shape, axes_count):
+                    msg = f"Ufunc operation modified protected trailing axes for field {name!r}."
+                    raise ValueError(msg)
+
+                if isinstance(item, np.ndarray):
+                    item = self._postprocess_ufunc_result(item, ufunc=ufunc, method=method)
+
+                results[index][name] = cast("NumpyProtectedValue", item)
+
+        outputs: list[object] = []
+        for index, values in enumerate(results):
+            if out is not None and out_items[index] is not None:
+                outputs.append(out_items[index])
                 continue
 
-            if axes_count == 0 and not hasattr(result, "ndim"):
-                result = np.asarray(result)
+            expected_batch_shape: tuple[int, ...] | None = None
+            for name, value in values.items():
+                axes_count = protected_axes[name]
+                current_batch_shape = batch_shape(value_shape(value), axes_count)
+                if expected_batch_shape is None:
+                    expected_batch_shape = current_batch_shape
+                elif current_batch_shape != expected_batch_shape:
+                    msg = "Ufunc operation produced inconsistent batch-shapes across protected fields."
+                    raise ValueError(msg)
 
-            result_ndim = value_ndim(result)
-            result_shape = value_shape(result)
-            original_shape = value_shape(self_values[name])
-            if result_ndim < axes_count:
-                msg = f"Ufunc operation removed protected trailing axes for field {name!r}."
-                raise ValueError(msg)
-            if protected_shape(result_shape, axes_count) != protected_shape(original_shape, axes_count):
-                msg = f"Ufunc operation modified protected trailing axes for field {name!r}."
-                raise ValueError(msg)
+            outputs.append(self.with_protected_values(values))
 
-            if isinstance(result, np.ndarray):
-                result = self._postprocess_ufunc_result(result, ufunc=ufunc, method=method)
-
-            results[name] = cast("NumpyProtectedValue", result)
-
-        if out is not None:
-            if method == "__call__":
-                return out
-            return out_items[0] if isinstance(out, tuple) else out
-
-        expected_batch_shape: tuple[int, ...] | None = None
-        for name, value in results.items():
-            axes_count = protected_axes[name]
-            current_batch_shape = batch_shape(value_shape(value), axes_count)
-            if expected_batch_shape is None:
-                expected_batch_shape = current_batch_shape
-            elif current_batch_shape != expected_batch_shape:
-                msg = "Ufunc operation produced inconsistent batch-shapes across protected fields."
-                raise ValueError(msg)
-
-        return self.with_protected_values(results)
+        return tuple(outputs) if output_count > 1 else outputs[0]
 
     def __array_function__(
         self,

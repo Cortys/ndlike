@@ -20,6 +20,9 @@ class _SingleProtected(NumpyAxisProtected[np.ndarray]):
     permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {
         np.add: ["__call__", "reduce", "accumulate", "reduceat"],
         np.multiply: ["__call__"],
+        np.modf: ["__call__"],
+        np.frexp: ["__call__"],
+        np.divmod: ["__call__"],
     }
 
 
@@ -31,6 +34,9 @@ class _ScalarProtected(NumpyAxisProtected[np.ndarray]):
     protected_axes: ClassVar[dict[str, int]] = {"array": 0}
     permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {
         np.add: ["__call__"],
+        np.modf: ["__call__"],
+        np.frexp: ["__call__"],
+        np.divmod: ["__call__"],
     }
 
 
@@ -43,6 +49,9 @@ class _TwoFieldProtected(NumpyAxisProtected[np.ndarray]):
     protected_axes: ClassVar[dict[str, int]] = {"left": 1, "right": 1}
     permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {
         np.add: ["__call__"],
+        np.modf: ["__call__"],
+        np.frexp: ["__call__"],
+        np.divmod: ["__call__"],
     }
 
 
@@ -251,13 +260,12 @@ def test_ufunc_call_returns_protected_result() -> None:
 
 
 def test_ufunc_with_protected_out_writes_in_place() -> None:
-    """``out=`` with a protected buffer updates in place; numpy wraps it as a tuple."""
+    """``out=`` with a protected buffer updates and returns the buffer itself."""
     x = _SingleProtected(np.arange(6.0).reshape(2, 3))
     out = _SingleProtected(np.zeros((2, 3)))
 
     result = np.add(x, 1.0, out=out)  # ty: ignore[no-matching-overload]
-    # numpy returns ``(out,)`` from ufunc(__call__) when ``out`` is given.
-    assert result == (out,) or result is out
+    assert result is out
     np.testing.assert_array_equal(out.array, x.array + 1.0)
 
 
@@ -268,7 +276,7 @@ def test_ufunc_with_raw_out_for_single_field() -> None:
 
     result = np.add(x, 1.0, out=raw_out)
     np.testing.assert_array_equal(raw_out, x.array + 1.0)
-    assert result == (raw_out,) or result is raw_out
+    assert result is raw_out
 
 
 def test_ufunc_with_tuple_out_for_single_field() -> None:
@@ -277,8 +285,87 @@ def test_ufunc_with_tuple_out_for_single_field() -> None:
     out = _SingleProtected(np.zeros((2, 3)))
 
     result = np.add(x, 1.0, out=(out,))  # ty: ignore[no-matching-overload]
-    assert result == (out,)
+    assert result is out
     np.testing.assert_array_equal(out.array, x.array + 1.0)
+
+
+@pytest.mark.parametrize("cls", [_SingleProtected, _TwoFieldProtected])
+@pytest.mark.parametrize("out_spec", [None, (False, False), (True, False), (False, True), (True, True)])
+@pytest.mark.parametrize(("ufunc", "extra_inputs"), [(np.modf, ()), (np.frexp, ()), (np.divmod, (0.5,))])
+def test_multi_output_ufunc_allocates_missing_outputs(cls, out_spec, ufunc, extra_inputs) -> None:
+    """Each missing output is wrapped, while provided output identities are preserved."""
+    values = {
+        name: np.arange(2 * (3 + i), dtype=float).reshape(2, 3 + i) / 4 - 1.25
+        for i, name in enumerate(cls.protected_axes)
+    }
+    x = cls(**values)
+    expected = {name: ufunc(value, *extra_inputs) for name, value in values.items()}
+    out = (
+        tuple(
+            cls(**{name: np.empty_like(items[index]) for name, items in expected.items()}) if provided else None
+            for index, provided in enumerate(out_spec)
+        )
+        if out_spec is not None
+        else None
+    )
+
+    result = ufunc(x, *extra_inputs) if out is None else ufunc(x, *extra_inputs, out=out)
+
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    for index, item in enumerate(result):
+        assert isinstance(item, cls)
+        if out is not None and out[index] is not None:
+            assert item is out[index]
+        for name, items in expected.items():
+            actual = getattr(item, name)
+            np.testing.assert_array_equal(actual, items[index])
+            assert actual.dtype == items[index].dtype
+
+
+@pytest.mark.parametrize("provided_index", [0, 1])
+@pytest.mark.parametrize(("ufunc", "extra_inputs"), [(np.modf, ()), (np.frexp, ()), (np.divmod, (0.5,))])
+def test_multi_output_ufunc_with_raw_out(provided_index, ufunc, extra_inputs) -> None:
+    """Single-field objects accept raw buffers alongside allocated protected outputs."""
+    x = _SingleProtected(np.arange(6.0).reshape(2, 3) / 4)
+    expected = ufunc(x.array, *extra_inputs)
+    raw_out = np.empty_like(expected[provided_index])
+    out = (raw_out, None) if provided_index == 0 else (None, raw_out)
+
+    result = ufunc(x, *extra_inputs, out=out)
+
+    assert result[provided_index] is raw_out
+    allocated = result[1 - provided_index]
+    assert isinstance(allocated, _SingleProtected)
+    np.testing.assert_array_equal(raw_out, expected[provided_index])
+    np.testing.assert_array_equal(allocated.array, expected[1 - provided_index])
+    assert allocated.array.dtype == expected[1 - provided_index].dtype
+
+
+@pytest.mark.parametrize(("ufunc", "extra_inputs"), [(np.modf, ()), (np.frexp, ()), (np.divmod, (0.5,))])
+def test_multi_output_ufunc_promotes_scalars_per_output(ufunc, extra_inputs) -> None:
+    """Scalar outputs with no protected axes are wrapped individually."""
+    x = _ScalarProtected(np.array(-1.25))
+
+    result = ufunc(x, *extra_inputs, out=(None, None))
+
+    for item, expected in zip(result, ufunc(x.array, *extra_inputs), strict=True):
+        assert isinstance(item, _ScalarProtected)
+        assert item.array.ndim == 0
+        np.testing.assert_array_equal(item.array, expected)
+        assert item.array.dtype == expected.dtype
+
+
+@pytest.mark.parametrize("cls", [_SingleProtected, _TwoFieldProtected])
+def test_single_output_ufunc_with_none_out(cls) -> None:
+    """A single ``None`` out slot allocates and returns a protected object, not a tuple."""
+    x = cls(**{name: np.ones((2, 3)) for name in cls.protected_axes})
+
+    result = np.add(x, 1.0, out=(None,))  # ty:ignore[no-matching-overload]
+
+    assert isinstance(result, cls)
+    for name in cls.protected_axes:
+        np.testing.assert_array_equal(getattr(result, name), 2.0)
 
 
 def test_ufunc_with_unprotected_out_for_multi_field_raises() -> None:

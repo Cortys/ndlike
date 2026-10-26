@@ -678,6 +678,8 @@ def _batch_comparison(values: dict[str, Any], template: JaxAxisProtectedInternal
         jf.jax_floor_divide,
         jf.jax_remainder,
         jf.jax_divmod,
+        jf.jax_frexp,
+        jf.jax_modf,
         jf.jax_power,
         jf.jax_matmul,
         jf.jax_bitwise_and,
@@ -721,9 +723,10 @@ def protected_operator_function(
                 operation = jax.vmap(operation, in_axes=in_axes, out_axes=-1)
         results[name] = operation(*field_args)
 
+    multiple_outputs = func in (jf.jax_divmod, jf.jax_frexp, jf.jax_modf)
     result_sets = (
         tuple({name: value[index] for name, value in results.items()} for index in range(2))
-        if func is jf.jax_divmod
+        if multiple_outputs
         else (results,)
     )
     reconstructed = []
@@ -734,4 +737,4 @@ def protected_operator_function(
         processed = owner._postprocess_elementwise_result(values, func=func, operands=args)  # noqa: SLF001
         _validate_operator_result(processed, template)
         reconstructed.append(template.create(processed))
-    return tuple(reconstructed) if func is jf.jax_divmod else reconstructed[0]
+    return tuple(reconstructed) if multiple_outputs else reconstructed[0]

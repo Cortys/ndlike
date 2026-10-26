@@ -47,6 +47,8 @@ _COMPARISONS: list[tuple[Callable, Callable, Callable]] = [
 ]
 _PERMITTED: set[Callable] = {wrapper for _, wrapper, _ in [*_BINARY, *_UNARY, *_COMPARISONS]} | {
     jf.jax_divmod,
+    jf.jax_frexp,
+    jf.jax_modf,
     jf.jax_matmul,
 }
 
@@ -227,6 +229,68 @@ def test_divmod_reconstructs_both_results():
         expected = jnp.divmod(raw_left, raw_right)
         np.testing.assert_array_equal(quotient.array, expected[0])
         np.testing.assert_array_equal(remainder.array, expected[1])
+
+
+@pytest.mark.parametrize(("wrapper", "backend"), [(jf.jax_frexp, jnp.frexp), (jf.jax_modf, jnp.modf)])
+@pytest.mark.parametrize("cls", [Numeric, Pair])
+@pytest.mark.parametrize("transform", [lambda func: func, jax.jit, jax.vmap], ids=["eager", "jit", "vmap"])
+def test_multi_output_unary_reconstructs_all_fields(wrapper, backend, cls, transform):
+    values = {
+        name: jnp.arange(2 * 3**axes, dtype=float).reshape((2, *((3,) * axes))) / 4 - 1.25
+        for name, axes in cls.protected_axes.items()
+    }
+    x = cls(**values)
+
+    result = transform(wrapper)(x)
+
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    for index, item in enumerate(result):
+        assert isinstance(item, cls)
+        assert item.shape == x.shape
+        for name, value in values.items():
+            actual = getattr(item, name)
+            expected = backend(value)[index]
+            np.testing.assert_array_equal(actual, expected)
+            assert actual.dtype == expected.dtype
+
+
+@pytest.mark.parametrize(("wrapper", "backend"), [(jf.jax_frexp, jnp.frexp), (jf.jax_modf, jnp.modf)])
+@pytest.mark.parametrize("value", [1.5, np.array([-1.25, 0, 8.5]), jnp.array([-1.25, 0, 8.5])])
+def test_multi_output_unary_native_inputs(wrapper, backend, value):
+    result = wrapper(value)
+    for actual, expected in zip(result, backend(value), strict=True):
+        assert isinstance(actual, jax.Array)
+        np.testing.assert_array_equal(actual, expected)
+        assert actual.dtype == expected.dtype
+
+
+@pytest.mark.parametrize("wrapper", [jf.jax_frexp, jf.jax_modf])
+def test_multi_output_unary_requires_permission(wrapper):
+    with pytest.raises(TypeError, match="no implementation found"):
+        wrapper(Denied(jnp.ones((2, 3))))
+
+
+@pytest.mark.parametrize("wrapper", [jf.jax_frexp, jf.jax_modf])
+def test_multi_output_unary_postprocesses_each_output(wrapper):
+    calls = []
+
+    @dataclass(frozen=True)
+    class Recorded(Numeric):
+        array: jax.Array
+
+        def _postprocess_elementwise_result(self, values, *, func, operands):
+            assert func is wrapper
+            assert len(operands) == 1
+            assert operands[0] is self
+            calls.append(values["array"])
+            return values
+
+    result = wrapper(Recorded(jnp.array([[-1.25, 0, 8.5]])))
+
+    assert len(calls) == 2
+    assert result[0].array is calls[0]
+    assert result[1].array is calls[1]
 
 
 @pytest.mark.parametrize("left_shape", [(3,), (2, 3), (4, 2, 3)])

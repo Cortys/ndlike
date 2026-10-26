@@ -442,8 +442,8 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
             operands: Original operands in expression order.
 
         Returns:
-            The field values to validate and reconstruct. For ``divmod``, this
-            hook is called separately for the quotient and remainder.
+            The field values to validate and reconstruct. For ``divmod``,
+            ``frexp``, and ``modf``, this hook is called separately for each output.
         """
         del func, operands
         return values

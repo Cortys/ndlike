@@ -318,6 +318,34 @@ def jax_divmod(
     return jnp.divmod(x1, x2)  # ty: ignore[invalid-argument-type]
 
 
+@jax_function_dispatch("x")
+def jax_frexp(x: _JaxFamily | JaxArrayLike, /) -> tuple[jax.Array | _JaxFamily, jax.Array | _JaxFamily]:
+    """Decompose values into mantissas and exponents, mirroring ``jax.numpy.frexp``.
+
+    Args:
+        x: Input values.
+
+    Returns:
+        A tuple of floating-point mantissas and integer exponents for native
+        inputs, or the result supplied by a custom override.
+    """
+    return jnp.frexp(x)  # ty: ignore[invalid-argument-type]
+
+
+@jax_function_dispatch("x")
+def jax_modf(x: _JaxFamily | JaxArrayLike, /) -> tuple[jax.Array | _JaxFamily, jax.Array | _JaxFamily]:
+    """Split values into fractional and integral parts, mirroring ``jax.numpy.modf``.
+
+    Args:
+        x: Input values.
+
+    Returns:
+        A tuple of fractional and integral parts for native inputs, or the result
+        supplied by a custom override.
+    """
+    return jnp.modf(x)  # ty: ignore[invalid-argument-type]
+
+
 @jax_function_dispatch("x1", "x2")
 def jax_power(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     """Raise operands to powers elementwise, mirroring ``jax.numpy.power``.
@@ -966,6 +994,7 @@ __all__ = [
     "jax_equal",
     "jax_expand_dims",
     "jax_floor_divide",
+    "jax_frexp",
     "jax_function_dispatch",
     "jax_greater",
     "jax_greater_equal",
@@ -976,6 +1005,7 @@ __all__ = [
     "jax_matmul",
     "jax_matrix_transpose",
     "jax_mean",
+    "jax_modf",
     "jax_moveaxis",
     "jax_multiply",
     "jax_negative",

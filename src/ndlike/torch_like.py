@@ -10,6 +10,7 @@ import numpy as np
 import torch
 
 from ndlike.array_like import ArrayLikeWithoutSize
+from ndlike.torch_operators import TorchOperatorsMixin
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -104,7 +105,7 @@ class TorchLike[DT](ArrayLikeWithoutSize[DT], Protocol):
         """Return a detached version of the array."""
 
 
-class TorchLikeImplementation[DT](TorchLike[DT], ABC):
+class TorchLikeImplementation[DT](TorchOperatorsMixin, TorchLike[DT], ABC):
     """ABC implementation for array-like objects that behave like torch tensors.
 
     Representation-specific indexing, metadata and namespace access are explicitly

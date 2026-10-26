@@ -257,7 +257,17 @@ class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.
     Representation-specific conversion and metadata are explicitly abstract rather
     than inherited as protocol placeholders. Unsupported indexing, iteration and
     scalar conversions retain their concrete ``NotImplementedError`` fallbacks.
+
+    Dataclass subclasses retain inherited array equality unless they explicitly
+    define ``__eq__``. Hashing follows the ordinary dataclass rules.
     """
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Preserve inherited equality before a subclass's dataclass decorator runs."""
+        super().__init_subclass__(**kwargs)
+        if "__eq__" not in cls.__dict__:
+            inherited_eq = cls.__eq__
+            cls.__eq__ = inherited_eq
 
     @abstractmethod
     def __array__(self, dtype: DTypeLike | None = None, /, *, copy: bool | None = None) -> np.ndarray:

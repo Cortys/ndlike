@@ -137,6 +137,9 @@ class JaxLikeImplementation[DT](JaxLike[DT], ABC):
     expressed generically. Every concrete method below routes through the wrappers in
     :mod:`ndlike.jax_functions` and thus back into ``__jax_function__``.
 
+    Dataclass subclasses retain inherited array equality unless they explicitly
+    define ``__eq__``. Hashing follows ordinary dataclass rules.
+
     Concrete (non-abstract) subclasses are additionally registered as JAX pytree nodes, which makes
     ``jax.jit``, ``jax.vmap``, ``jax.grad`` and ``jax.tree`` work on them. This does not replace the
     override machinery: ``jnp.sum(obj)`` still raises for a registered pytree.
@@ -208,12 +211,15 @@ class JaxLikeImplementation[DT](JaxLike[DT], ABC):
         """Return the devices containing the underlying array."""
 
     def __init_subclass__(cls, **kwargs: object) -> None:
-        """Register concrete subclasses as JAX pytree nodes.
+        """Preserve inherited equality and register concrete subclasses as JAX pytree nodes.
 
         Args:
             **kwargs: Keyword arguments forwarded to ``super().__init_subclass__``.
         """
         super().__init_subclass__(**kwargs)
+        if "__eq__" not in cls.__dict__:
+            inherited_eq = cls.__eq__
+            cls.__eq__ = inherited_eq
 
         if cls is JaxLikeImplementation or isabstract(cls) or ABC in cls.__bases__:
             return

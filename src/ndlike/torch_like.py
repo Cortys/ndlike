@@ -110,7 +110,17 @@ class TorchLikeImplementation[DT](TorchOperatorsMixin, TorchLike[DT], ABC):
 
     Representation-specific indexing, metadata and namespace access are explicitly
     abstract so incomplete subclasses cannot inherit silent protocol placeholders.
+
+    Dataclass subclasses retain inherited array equality unless they explicitly
+    define ``__eq__``. Hashing follows the ordinary dataclass rules.
     """
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Preserve inherited equality before a subclass's dataclass decorator runs."""
+        super().__init_subclass__(**kwargs)
+        if "__eq__" not in cls.__dict__:
+            inherited_eq = cls.__eq__
+            cls.__eq__ = inherited_eq
 
     @abstractmethod
     def __getitem__(self, index: ToIndices, /) -> Any:  # noqa: ANN401

@@ -45,8 +45,9 @@ class JaxOperatorsMixin:  # noqa: PLW1641
     Operators use the corresponding ``jax_*`` wrapper as their dispatch key.
     Implementations control permissions and result types. Augmented assignment
     uses Python's ordinary out-of-place operator fallback, matching JAX immutability.
-    Subclasses can override comparison methods; dataclasses must use ``eq=False``
-    to inherit the mixin's equality operator instead of generating their own.
+    Subclasses can override comparison methods. ``JaxLikeImplementation`` preserves
+    inherited equality for dataclasses; dataclasses using this mixin directly still
+    need ``eq=False`` to avoid generating their own equality operator.
     """
 
     # NumPy must defer mixed infix expressions rather than coerce a protected

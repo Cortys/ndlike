@@ -45,8 +45,9 @@ class TorchOperatorsMixin:  # noqa: PLW1641
     Operators call the corresponding torch functions directly, preserving their
     dispatch and error behavior. Implementations control permissions and result
     types. Augmented assignment uses Python's out-of-place operator fallback.
-    Subclasses can override comparison methods; dataclasses must use ``eq=False``
-    to inherit the mixin's equality operator instead of generating their own.
+    Subclasses can override comparison methods. ``TorchLikeImplementation`` preserves
+    inherited equality for dataclasses; dataclasses using this mixin directly still
+    need ``eq=False`` to avoid generating their own equality operator.
     """
 
     # NumPy must defer mixed infix expressions rather than bypass overrides by

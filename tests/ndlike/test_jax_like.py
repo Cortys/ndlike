@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from inspect import isabstract
-from typing import Any, ClassVar, Self, assert_type
+from typing import Any, ClassVar, Never, Self, assert_type
 from typing_extensions import get_protocol_members
 
 import numpy as np
@@ -772,6 +772,85 @@ class TestPytreeRegistration:
         assert isinstance(gradient, _CheckedInit)
         np.testing.assert_array_equal(gradient.array, -np.ones(3))
         assert constructed == ["init"]
+
+
+class TestNumpyUfuncCoercion:
+    def test_implementation_does_not_define_numpy_ufunc_override(self):
+        assert not hasattr(JaxLikeImplementation, "__array_ufunc__")
+
+    def test_unary_ufunc_uses_array_conversion_not_representation_conversion(self):
+        class _WithHook(_Wrapper):
+            def __array_like__(self, dtype=None, /, *, copy=None) -> Never:
+                del dtype, copy
+                pytest.fail("NumPy coercion must not call the representation-preserving hook")
+
+        x = _WithHook(jnp.arange(3.0))
+        result = np.sin(x)
+        assert type(result) is np.ndarray
+        np.testing.assert_array_equal(result, np.sin(np.asarray(x)))
+
+    @pytest.mark.parametrize("kind", ["scalar", "numpy", "wrapper"])
+    @pytest.mark.parametrize("reflected", [False, True])
+    def test_binary_ufunc_coercion_preserves_operand_order(self, kind, reflected):
+        x = _Wrapper(jnp.arange(3.0))
+        other = {"scalar": 2, "numpy": np.array([1.0, 2.0, 3.0]), "wrapper": _Wrapper(jnp.ones(3))}[kind]
+        left, right = (other, x) if reflected else (x, other)
+        result = np.subtract(left, right)
+        assert type(result) is np.ndarray
+        np.testing.assert_array_equal(result, np.subtract(np.asarray(left), np.asarray(right)))
+
+    def test_native_numpy_output_buffer_is_respected(self):
+        x = _Wrapper(jnp.ones(3))
+        out = np.empty(3)
+        assert np.add(x, 2, out=out) is out
+        np.testing.assert_array_equal(out, 3)
+        np.testing.assert_array_equal(np.asarray(x), 1)
+
+    @pytest.mark.parametrize("operation", [lambda x: np.add(x, 1, out=x), lambda x: np.add.at(x, 0, 1)])
+    def test_numpy_rejects_wrapper_mutation_targets(self, operation):
+        x = _Wrapper(jnp.ones(3))
+        with pytest.raises(TypeError):
+            operation(x)
+        np.testing.assert_array_equal(np.asarray(x), 1)
+
+    def test_tracing_conversion_restrictions_propagate(self):
+        with pytest.raises(jax.errors.TracerArrayConversionError):
+            jax.jit(lambda array: np.sin(_Wrapper(array)))(jnp.ones(3))
+
+    def test_array_conversion_errors_propagate_unchanged(self):
+        error = ValueError("conversion unavailable")
+
+        class _Broken(_Wrapper):
+            def __array__(self, dtype=None, /, *, copy=None) -> Never:
+                del dtype, copy
+                raise error
+
+        with pytest.raises(ValueError, match="conversion unavailable") as caught:
+            np.sin(_Broken(jnp.ones(3)))
+        assert caught.value is error
+
+    @pytest.mark.parametrize("declines", [False, True])
+    def test_explicit_ufunc_override_takes_precedence_over_coercion(self, declines):
+        sentinel = object()
+
+        class _Override(_Wrapper):
+            def __array_ufunc__(self, ufunc, method, *inputs: object, **kwargs: object) -> object:
+                del self, ufunc, method, inputs, kwargs
+                return NotImplemented if declines else sentinel
+
+        x = _Override(jnp.ones(3))
+        if declines:
+            with pytest.raises(TypeError):
+                np.sin(x)
+        else:
+            assert np.sin(x) is sentinel
+
+    def test_subclasses_can_explicitly_disable_numpy_ufuncs(self):
+        class _NoNumpy(_Wrapper):
+            __array_ufunc__ = None
+
+        with pytest.raises(TypeError):
+            np.sin(_NoNumpy(jnp.ones(3)))
 
 
 class TestGenericOperators:

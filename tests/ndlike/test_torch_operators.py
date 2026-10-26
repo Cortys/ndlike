@@ -231,9 +231,12 @@ def test_declined_overrides_raise_torch_dispatch_errors(op):
         op(_Denied()) if op is operator.neg else op(_Denied(), torch.ones(2))
 
 
-def test_numpy_ufunc_cannot_bypass_overrides():
+def test_subclasses_can_explicitly_disable_numpy_ufuncs():
+    class _NoNumpy(_Recording):
+        __array_ufunc__ = None
+
     with pytest.raises(TypeError):
-        np.add(_Recording(), 1)
+        np.add(_NoNumpy(), 1)
 
 
 @pytest.mark.parametrize(("op", "func"), [*_BINARY, *_COMPARISONS, (operator.matmul, torch.matmul)])

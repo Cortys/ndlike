@@ -48,12 +48,13 @@ class JaxOperatorsMixin:  # noqa: PLW1641
     Subclasses can override comparison methods. ``JaxLikeImplementation`` preserves
     inherited equality for dataclasses; dataclasses using this mixin directly still
     need ``eq=False`` to avoid generating their own equality operator.
+
+    NumPy ufuncs may coerce through ``__array__`` without preserving the wrapper.
+    Subclasses can define ``__array_ufunc__`` to override or disable that behavior.
     """
 
-    # NumPy must defer mixed infix expressions rather than coerce a protected
-    # operand through __array__ and discard its wrapper and permissions.
+    # Prefer reflected operators in mixed NumPy infix expressions.
     __array_priority__ = 1000
-    __array_ufunc__ = None
 
     __add__ = _binary(jf.jax_add)
     __radd__ = _binary(jf.jax_add, reflected=True)

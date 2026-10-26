@@ -4,10 +4,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import torch
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+
+def _supports_operand(value: object) -> bool:
+    """Recognize tensor, scalar, and Torch override operands without converting them."""
+    return isinstance(value, (torch.Tensor, np.number, np.bool_, bool, int, float, complex)) or callable(
+        getattr(type(value), "__torch_function__", None)
+    )
 
 
 def _binary(func: Callable, *, reflected: bool = False) -> Callable[[Any, object], Any]:
@@ -15,6 +23,8 @@ def _binary(func: Callable, *, reflected: bool = False) -> Callable[[Any, object
 
     def method(self: object, other: object) -> Any:  # noqa: ANN401
         """Return the torch function's result with the appropriate operand order."""
+        if not _supports_operand(other):
+            return NotImplemented
         args = (other, self) if reflected else (self, other)
         return func(*args)
 
@@ -48,6 +58,9 @@ class TorchOperatorsMixin:  # noqa: PLW1641
     Subclasses can override comparison methods. ``TorchLikeImplementation`` preserves
     inherited equality for dataclasses; dataclasses using this mixin directly still
     need ``eq=False`` to avoid generating their own equality operator.
+
+    Binary operators return ``NotImplemented`` for unsupported operand families,
+    allowing Python's reflected-operator fallback. Backend errors still propagate.
 
     NumPy ufuncs may coerce through ``__array__`` without preserving the wrapper.
     Subclasses can define ``__array_ufunc__`` to override or disable that behavior.
@@ -95,12 +108,12 @@ class TorchOperatorsMixin:  # noqa: PLW1641
 
     def __pow__(self, other: object, modulo: object = None) -> Any:  # noqa: ANN401
         """Dispatch exponentiation; modular exponentiation is unsupported."""
-        if modulo is not None:
+        if modulo is not None or not _supports_operand(other):
             return NotImplemented
         return torch.pow(self, other)  # ty: ignore[no-matching-overload]
 
     def __rpow__(self, other: object, modulo: object = None) -> Any:  # noqa: ANN401
         """Dispatch reflected exponentiation; modular exponentiation is unsupported."""
-        if modulo is not None:
+        if modulo is not None or not _supports_operand(other):
             return NotImplemented
         return torch.pow(other, self)  # ty: ignore[no-matching-overload]

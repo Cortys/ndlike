@@ -15,6 +15,7 @@ pytest.importorskip("torch")
 import torch
 from torch.testing import assert_close
 
+from ndlike.protected_axis.numpy import NumpyAxisProtected
 from ndlike.protected_axis.torch import TorchAxisProtected
 from ndlike.torch_like import TorchLikeImplementation
 from ndlike.torch_operators import TorchOperatorsMixin
@@ -68,7 +69,7 @@ class _Recording(TorchOperatorsMixin):
         pytest.fail("Operators must not coerce wrappers through __array__")
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class _Tensor(TorchAxisProtected[torch.Tensor]):
     tensor: torch.Tensor
     protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
@@ -79,6 +80,15 @@ class _Tensor(TorchAxisProtected[torch.Tensor]):
             return NotImplemented
         raw = tuple(arg.tensor if isinstance(arg, cls) else arg for arg in args)
         return cls(func(*raw, **(kwargs or {})))
+
+
+@dataclass(frozen=True)
+class _NumpyArray(NumpyAxisProtected[np.ndarray]):
+    array: np.ndarray
+    protected_axes: ClassVar[dict[str, int]] = {"array": 0}
+    permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {
+        func: ["__call__"] for func in (np.add, np.subtract, np.multiply, np.true_divide, np.power)
+    }
 
 
 @pytest.mark.parametrize(("op", "func"), [*_BINARY, (operator.matmul, torch.matmul)])
@@ -239,10 +249,67 @@ def test_subclasses_can_explicitly_disable_numpy_ufuncs():
         np.add(_NoNumpy(), 1)
 
 
-@pytest.mark.parametrize(("op", "func"), [*_BINARY, *_COMPARISONS, (operator.matmul, torch.matmul)])
+@pytest.mark.parametrize(("op", "func"), [*_BINARY, (operator.matmul, torch.matmul), (divmod, None)])
 @pytest.mark.parametrize("reflected", [False, True])
-def test_numpy_operands_are_rejected_without_coercing_wrapper(op, func, reflected):
+def test_numpy_operands_are_declined_before_torch_dispatch(op, func, reflected):
     del func
     x, other = _Recording(), np.ones(2)
+    method = f"__{'r' if reflected else ''}{op.__name__.removesuffix('_')}__"
+    assert getattr(x, method)(other) is NotImplemented
+
+
+@pytest.mark.parametrize(("op", "func"), _COMPARISONS)
+def test_numpy_comparisons_are_declined_before_torch_dispatch(op, func):
+    del func
+    assert getattr(_Recording(), f"__{op.__name__}__")(np.ones(2)) is NotImplemented
+
+
+@pytest.mark.parametrize("scalar", [True, 2, 1.5, 2j, np.bool_(True), np.int64(2), np.float32(2)])
+def test_supported_scalar_families_still_reach_torch_dispatch(scalar):
+    x = _Recording()
+    result = x + scalar
+    assert isinstance(result, _Call)
+    assert result.func is torch.add
+    assert result.args[0] is x
+    assert result.args[1] == scalar
+
+
+@pytest.mark.parametrize(
+    "op", [operator.add, operator.sub, operator.mul, operator.truediv, operator.pow, divmod, operator.matmul]
+)
+def test_foreign_operand_can_handle_the_reflected_operation(op):
+    method = f"__r{op.__name__}__"
+    other = type("Reflected", (), {method: lambda self, left: ("reflected", left, self)})()
+    x = _Recording()
+    result = op(x, other)
+    assert result[0] == "reflected"
+    assert result[1] is x
+    assert result[2] is other
+
+
+@pytest.mark.parametrize("op", [operator.add, operator.sub, operator.mul, operator.truediv, operator.pow])
+@pytest.mark.parametrize("reflected", [False, True])
+def test_numpy_representation_handles_mixed_infix_operations(op, reflected):
+    x = _Tensor(torch.tensor([[1, 2], [3, 4]]))
+    other = _NumpyArray(np.array([[2, 3], [4, 5]]))
+    left, right = (other, x) if reflected else (x, other)
+    result = op(left, right)
+    assert isinstance(result, _NumpyArray)
+    raw = np.asarray(x)
+    expected = op(other.array, raw) if reflected else op(raw, other.array)
+    np.testing.assert_array_equal(result.array, expected)
+    np.testing.assert_array_equal(np.asarray(x), [[1, 2], [3, 4]])
     with pytest.raises(TypeError):
-        op(other, x) if reflected else op(x, other)
+        torch.add(x, other)  # ty: ignore[invalid-argument-type]
+
+
+def test_operand_check_does_not_coerce_foreign_objects_or_accept_non_callable_overrides():
+    class Foreign:
+        __torch_function__ = None
+
+        def __array__(self, *args: object, **kwargs: object) -> Never:
+            del args, kwargs
+            pytest.fail("Operand checks must not coerce foreign objects")
+
+    assert _Recording().__add__(Foreign()) is NotImplemented
+    assert _Recording().__pow__(Foreign()) is NotImplemented

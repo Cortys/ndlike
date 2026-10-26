@@ -51,20 +51,20 @@ _PERMITTED: set[Callable] = {wrapper for _, wrapper, _ in [*_BINARY, *_UNARY, *_
 }
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class Numeric(JaxAxisProtected[jax.Array]):
     array: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
     permitted_functions: ClassVar[set[Callable]] = _PERMITTED
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class Denied(JaxAxisProtected[jax.Array]):
     array: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True)
 class Pair(JaxAxisProtected[jax.Array]):
     first: jax.Array
     second: jax.Array
@@ -164,7 +164,7 @@ def test_unsynchronized_fields_are_rejected_after_broadcast():
 
 
 def test_both_operands_must_permit_operation():
-    @dataclass(frozen=True, eq=False)
+    @dataclass(frozen=True)
     class Restricted(Numeric):
         array: jax.Array
         permitted_functions: ClassVar[set[Callable]] = set()
@@ -181,7 +181,7 @@ def test_both_operands_must_permit_operation():
 
 @pytest.mark.parametrize("dtype", [float, object])
 def test_numpy_sidecars_are_rejected(dtype):
-    @dataclass(frozen=True, eq=False)
+    @dataclass(frozen=True)
     class Sidecar(JaxAxisProtected[jax.Array]):
         array: jax.Array
         sidecar: np.ndarray
@@ -263,7 +263,7 @@ def test_augmented_assignment_rebinds_without_mutating():
 
 
 def test_result_hook_receives_context_and_cannot_change_protected_shape():
-    @dataclass(frozen=True, eq=False)
+    @dataclass(frozen=True)
     class BrokenResult(JaxAxisProtected[jax.Array]):
         array: jax.Array
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
@@ -288,7 +288,7 @@ def test_traced_arithmetic_and_gradients():
 
 
 def test_instance_permission_veto_is_respected_on_either_operand():
-    @dataclass(frozen=True, eq=False)
+    @dataclass(frozen=True)
     class Veto(Numeric):
         array: jax.Array
         deny: bool = False
@@ -306,7 +306,7 @@ def test_instance_permission_veto_is_respected_on_either_operand():
 
 
 def test_operation_context_reaches_reconstruction():
-    @dataclass(frozen=True, eq=False)
+    @dataclass(frozen=True)
     class Recorded(Numeric):
         array: jax.Array
 

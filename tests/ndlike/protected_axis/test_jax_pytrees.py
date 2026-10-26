@@ -22,7 +22,7 @@ class _Metadata:
     shape: tuple[int, ...] = (37,)
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, slots=True)
 class _Pair(JaxAxisProtected[jax.Array]):
     array: jax.Array
     second: jax.Array
@@ -31,7 +31,7 @@ class _Pair(JaxAxisProtected[jax.Array]):
     permitted_functions: ClassVar[set[Any]] = {jax_add, jax_multiply}
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, slots=True)
 class _Sidecar(JaxAxisProtected[jax.Array]):
     array: jax.Array
     labels: np.ndarray | jax.Array
@@ -104,7 +104,7 @@ def test_unprotected_arrays_are_not_silently_batched_or_made_static():
 
 
 def test_array_convenience_methods_use_protected_fields_independently():
-    @dataclass(frozen=True, eq=False)
+    @dataclass(frozen=True)
     class _CustomTree(_Pair):
         array: jax.Array
         second: jax.Array
@@ -162,7 +162,7 @@ def test_jit_cannot_silently_convert_numpy_sidecars_in_results():
 
 @pytest.mark.parametrize("force_opaque", [False, True])
 def test_opaque_eager_mapping_keeps_numpy_sidecars_under_representation_control(force_opaque):
-    @dataclass(frozen=True, eq=False)
+    @dataclass(frozen=True)
     class _Configurable(_Sidecar):
         array: jax.Array
         labels: np.ndarray | jax.Array

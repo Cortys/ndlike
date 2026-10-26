@@ -4,10 +4,22 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import jax
+import numpy as np
+
 from ndlike import jax_functions as jf
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+
+def _supports_operand(value: object) -> bool:
+    """Recognize JAX inputs and declared JAX protocols without converting them."""
+    return (
+        isinstance(value, (jax.Array, np.ndarray, np.number, np.bool_, bool, int, float, complex))
+        or callable(getattr(type(value), "__jax_function__", None))
+        or callable(getattr(type(value), "__jax_array__", None))
+    )
 
 
 def _binary(func: Callable, *, reflected: bool = False) -> Callable[[Any, object], Any]:
@@ -23,6 +35,8 @@ def _binary(func: Callable, *, reflected: bool = False) -> Callable[[Any, object
         Returns:
             The override result, or NotImplemented for unsupported operands.
         """
+        if not _supports_operand(other):
+            return NotImplemented
         args = (other, self) if reflected else (self, other)
         return jf.try_jax_function(func, args, *args)
 
@@ -48,6 +62,9 @@ class JaxOperatorsMixin:  # noqa: PLW1641
     Subclasses can override comparison methods. ``JaxLikeImplementation`` preserves
     inherited equality for dataclasses; dataclasses using this mixin directly still
     need ``eq=False`` to avoid generating their own equality operator.
+
+    Binary operators decline unsupported operand families before backend dispatch,
+    allowing Python's reflected-operator fallback. Backend errors still propagate.
 
     NumPy ufuncs may coerce through ``__array__`` without preserving the wrapper.
     Subclasses can define ``__array_ufunc__`` to override or disable that behavior.
@@ -95,12 +112,12 @@ class JaxOperatorsMixin:  # noqa: PLW1641
 
     def __pow__(self, other: object, modulo: object = None) -> Any:  # noqa: ANN401
         """Dispatch exponentiation; modular exponentiation is unsupported."""
-        if modulo is not None:
+        if modulo is not None or not _supports_operand(other):
             return NotImplemented
         return jf.try_jax_function(jf.jax_power, (self, other), self, other)
 
     def __rpow__(self, other: object, modulo: object = None) -> Any:  # noqa: ANN401
         """Dispatch reflected exponentiation; modular exponentiation is unsupported."""
-        if modulo is not None:
+        if modulo is not None or not _supports_operand(other):
             return NotImplemented
         return jf.try_jax_function(jf.jax_power, (other, self), other, self)

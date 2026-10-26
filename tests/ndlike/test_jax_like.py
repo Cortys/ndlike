@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from inspect import isabstract
+import operator
 from typing import Any, ClassVar, Never, Self, assert_type
 from typing_extensions import get_protocol_members
 
@@ -18,6 +19,7 @@ import jax.numpy as jnp
 from ndlike.jax_functions import (
     handle_jax_function,
     has_jax_function,
+    jax_add,
     jax_average,
     jax_concatenate,
     jax_copy,
@@ -36,6 +38,7 @@ from ndlike.jax_like import (
     jax_tree_map,
     to_jax_like,
 )
+from ndlike.protected_axis.numpy import NumpyAxisProtected
 
 
 def _unwrap(value: Any) -> Any:  # noqa: ANN401
@@ -109,6 +112,15 @@ class _Wrapper(JaxLikeImplementation[jax.Array]):
 
     def __iter__(self):  # noqa: ANN204
         return (self[index] for index in range(len(self)))
+
+
+@dataclass(frozen=True)
+class _NumpyArray(NumpyAxisProtected[np.ndarray]):
+    array: np.ndarray
+    protected_axes: ClassVar[dict[str, int]] = {"array": 0}
+    permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {
+        func: ["__call__"] for func in (np.add, np.subtract, np.multiply, np.true_divide, np.power)
+    }
 
 
 @dataclass(frozen=True)
@@ -550,7 +562,7 @@ class TestPytreeRegistration:
             _Manual._pytree_field_names()  # noqa: SLF001
 
     def test_child_order_and_placeholder_values_are_stable(self):
-        @dataclass(frozen=True, slots=True, eq=False)
+        @dataclass(frozen=True, slots=True)
         class _Pair(_Wrapper):
             weights: jax.Array | None = None
             pytree_children: ClassVar[tuple[str, ...]] = ("weights", "array")
@@ -566,7 +578,7 @@ class TestPytreeRegistration:
         assert rebuilt_aux == aux
 
     def test_scalar_children_participate_in_autodiff(self):
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _Scaled(_Wrapper):
             scale: float = 2.0
             pytree_children: ClassVar[tuple[str, ...]] = ("array", "scale")
@@ -585,7 +597,7 @@ class TestPytreeRegistration:
         ],
     )
     def test_numpy_arrays_in_dynamic_fields_are_rejected_recursively(self, container):
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _WithPayload(_Wrapper):
             payload: Any = None
             pytree_children: ClassVar[tuple[str, ...]] = ("array", "payload")
@@ -595,7 +607,7 @@ class TestPytreeRegistration:
             jax.tree.leaves(x)
 
     def test_nested_implementations_reject_their_own_numpy_fields(self):
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _Nested(_Wrapper):
             array: Any
 
@@ -618,7 +630,7 @@ class TestPytreeRegistration:
                 del aux_data
                 return cls(children[0])
 
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _WithPayload(_Wrapper):
             payload: Any = None
             pytree_children: ClassVar[tuple[str, ...]] = ("array", "payload")
@@ -628,7 +640,7 @@ class TestPytreeRegistration:
             jax.tree.leaves(x)
 
     def test_numpy_scalars_remain_supported_dynamic_numbers(self):
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _Scaled(_Wrapper):
             scale: Any = None
             pytree_children: ClassVar[tuple[str, ...]] = ("array", "scale")
@@ -654,7 +666,7 @@ class TestPytreeRegistration:
         class _ShapeMetadata:
             shape: tuple[int, ...] = (37,)
 
-        @dataclass(frozen=True, slots=True, eq=False)
+        @dataclass(frozen=True, slots=True)
         class _WithMetadata(_Wrapper):
             metadata: _ShapeMetadata = field(default_factory=_ShapeMetadata)
             optional_metadata: None = None
@@ -671,7 +683,7 @@ class TestPytreeRegistration:
         [np.ones(2), jnp.ones(2), [], {}, set(), (np.ones(2),)],
     )
     def test_unsupported_static_metadata_reports_the_field(self, metadata):
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _WithMetadata(_Wrapper):
             metadata: Any = None
 
@@ -683,7 +695,7 @@ class TestPytreeRegistration:
         class _HashableArray(np.ndarray):
             __hash__ = object.__hash__  # ty:ignore[invalid-assignment]
 
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _WithMetadata(_Wrapper):
             metadata: Any = None
 
@@ -706,7 +718,7 @@ class TestPytreeRegistration:
         assert traced_labels == ["one", "two"]
 
     def test_explicitly_empty_children_are_allowed(self):
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _Static(_Wrapper):
             array: Any = None
             pytree_children: ClassVar[tuple[str, ...]] = ()
@@ -737,7 +749,7 @@ class TestPytreeRegistration:
     def test_dataclass_post_init_is_skipped_for_transforms_and_invalid_gradients(self):
         constructed = []
 
-        @dataclass(frozen=True, slots=True, eq=False)
+        @dataclass(frozen=True, slots=True)
         class _Positive(_Wrapper):
             derived: str = field(init=False, default="checked")
 
@@ -891,6 +903,103 @@ class TestGenericOperators:
         with pytest.raises(TypeError):
             _ = x * 2
 
+    @pytest.mark.parametrize(
+        "method",
+        [
+            f"__{prefix}{name}__"
+            for name in (
+                "add",
+                "sub",
+                "mul",
+                "truediv",
+                "floordiv",
+                "mod",
+                "pow",
+                "matmul",
+                "and",
+                "or",
+                "xor",
+                "lshift",
+                "rshift",
+                "divmod",
+            )
+            for prefix in ("", "r")
+        ]
+        + [f"__{name}__" for name in ("eq", "ne", "lt", "le", "gt", "ge")],
+    )
+    def test_foreign_representations_are_declined_before_jax_dispatch(self, method):
+        x = _Wrapper(jnp.ones(3))
+        other = _NumpyArray(np.ones(3))
+        assert getattr(x, method)(other) is NotImplemented
+
+    @pytest.mark.parametrize(
+        "op", [operator.add, operator.sub, operator.mul, operator.truediv, operator.pow, divmod, operator.matmul]
+    )
+    def test_foreign_operand_can_handle_the_reflected_operation(self, op):
+        method = f"__r{op.__name__}__"
+        other = type("Reflected", (), {method: lambda self, left: ("reflected", left, self)})()
+        x = _Wrapper(jnp.ones(3))
+        result = op(x, other)
+        assert result[0] == "reflected"
+        assert result[1] is x
+        assert result[2] is other
+
+    @pytest.mark.parametrize("op", [operator.add, operator.sub, operator.mul, operator.truediv, operator.pow])
+    @pytest.mark.parametrize("reflected", [False, True])
+    def test_numpy_representation_handles_mixed_infix_operations(self, op, reflected):
+        x = _Wrapper(jnp.array([1, 2, 3]))
+        other = _NumpyArray(np.array([2, 3, 4]))
+        left, right = (other, x) if reflected else (x, other)
+        result = op(left, right)
+        assert isinstance(result, _NumpyArray)
+        raw = np.asarray(x)
+        expected = op(other.array, raw) if reflected else op(raw, other.array)
+        np.testing.assert_array_equal(result.array, expected)
+        np.testing.assert_array_equal(x.array, [1, 2, 3])
+        with pytest.raises(TypeError):
+            jax_add(x, other)  # ty: ignore[invalid-argument-type]
+
+    @pytest.mark.parametrize(
+        "op", [operator.add, operator.sub, operator.mul, operator.truediv, operator.pow, divmod, operator.matmul]
+    )
+    def test_implementation_errors_propagate_unchanged(self, op):
+        error = TypeError("implementation error")
+
+        class Broken(_Wrapper):
+            @classmethod
+            def __jax_function__(cls, func, types, args=(), kwargs=None) -> Never:
+                del cls, func, types, args, kwargs
+                raise error
+
+        with pytest.raises(TypeError, match="implementation error") as caught:
+            op(Broken(jnp.ones(3)), 2)
+        assert caught.value is error
+
+    def test_traced_scalar_operands_remain_supported(self):
+        x = _Wrapper(jnp.ones(3))
+        result = jax.jit(lambda value, scale: value + scale)(x, jnp.array(2.0))
+        assert isinstance(result, _Wrapper)
+        np.testing.assert_array_equal(result.array, 3)
+
+    @pytest.mark.parametrize("scalar", [True, 2, 1.5, 2j, np.bool_(True), np.int64(2), np.float32(2)])
+    def test_supported_scalar_families_remain_supported(self, scalar):
+        x = _Wrapper(jnp.ones(3))
+        result = x + scalar
+        assert isinstance(result, _Wrapper)
+        np.testing.assert_array_equal(result.array, x.array + scalar)
+
+    def test_operand_check_does_not_coerce_foreign_objects_or_accept_non_callable_overrides(self):
+        class Foreign:
+            __jax_function__ = None
+
+            def __array__(self, *args: object, **kwargs: object) -> Never:
+                del args, kwargs
+                pytest.fail("Operand checks must not coerce foreign objects")
+
+        x = _Wrapper(jnp.ones(3))
+        assert x.__add__(Foreign()) is NotImplemented
+        assert x.__pow__(Foreign()) is NotImplemented
+
 
 class TestRepresentationFields:
     def test_immutable_copy_hooks_cannot_cause_in_place_updates(self):
@@ -905,7 +1014,7 @@ class TestRepresentationFields:
         assert x.array.dtype == jnp.float32
 
     def test_convenience_methods_do_not_use_pytree_overrides_or_validate_metadata(self):
-        @dataclass(frozen=True, slots=True, eq=False)
+        @dataclass(frozen=True, slots=True)
         class _CustomTree(_Wrapper):
             metadata: Any = None
 
@@ -927,7 +1036,7 @@ class TestRepresentationFields:
         assert x.block_until_ready() is x
 
     def test_representation_fields_can_be_selected_independently(self):
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _DifferentFields(_Wrapper):
             other: Any = None
 
@@ -942,7 +1051,7 @@ class TestRepresentationFields:
         assert converted.other.dtype == jnp.int32
 
     def test_optional_array_fields_are_preserved(self):
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _Optional(_Wrapper):
             weights: jax.Array | None = None
             pytree_children: ClassVar[tuple[str, ...]] = ("array", "weights")
@@ -953,7 +1062,7 @@ class TestRepresentationFields:
         assert x.block_until_ready() is x
 
     def test_nested_convenience_methods_respect_the_inner_representation(self):
-        @dataclass(frozen=True, slots=True, eq=False)
+        @dataclass(frozen=True, slots=True)
         class _Inner(_Wrapper):
             metadata: Any = None
 
@@ -961,7 +1070,7 @@ class TestRepresentationFields:
                 msg = "array methods must not flatten nested representations"
                 raise AssertionError(msg)
 
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _Outer(_Wrapper):
             array: Any
 
@@ -1027,7 +1136,7 @@ class TestJaxTreeMap:
         np.testing.assert_array_equal(mapped["value"].array, [4.0])
 
     def test_nested_implementations_use_their_own_flags(self):
-        @dataclass(frozen=True, eq=False)
+        @dataclass(frozen=True)
         class _Outer(_Wrapper):
             array: Any
             tree_map_traverse: ClassVar[bool] = True

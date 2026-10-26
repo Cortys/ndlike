@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ndlike"
-version = "0.2.0"
+version = "0.2.1"
 description = "A toolkit for defining custom array types on top of NumPy, JAX, and PyTorch."
 readme = "README.md"
 license = "MIT"

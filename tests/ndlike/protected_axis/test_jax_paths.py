@@ -749,7 +749,7 @@ def test_protected_values_rejects_desynced_batch_shapes() -> None:
     """Protected fields must agree on their batch shape."""
     x = _PairArrayProtected(jnp.ones((2, 4)), jnp.ones((3, 4)))
 
-    with pytest.raises(ValueError, match="do not share the same batch-shape"):
+    with pytest.raises(ValueError, match="inconsistent batch-shapes"):
         _ = x.protected_values()
 
 
@@ -960,6 +960,7 @@ class _FakeEmptyProtectedAxes:
     """Duck-typed stand-in with an empty ``protected_axes``, which real subclasses cannot have."""
 
     protected_axes: ClassVar[dict[str, int]] = {}
+    primary_protected_name: ClassVar[str] = "array"
     permitted_functions: ClassVar[set[Any]] = set()
 
     def protected_values(self, func: Callable | None = None) -> dict[str, Any]:
@@ -975,6 +976,7 @@ class _FakeMissingField:
     """Duck-typed stand-in whose ``protected_values()`` omits a field it declares."""
 
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
+    primary_protected_name: ClassVar[str] = "array"
     permitted_functions: ClassVar[set[Any]] = set()
 
     def protected_values(self, func: Callable | None = None) -> dict[str, Any]:
@@ -994,6 +996,7 @@ class _FakeInsufficientNdim:
     """
 
     protected_axes: ClassVar[dict[str, int]] = {"array": 2}
+    primary_protected_name: ClassVar[str] = "array"
     permitted_functions: ClassVar[set[Any]] = set()
 
     def protected_values(self, func: Callable | None = None) -> dict[str, Any]:
@@ -1023,13 +1026,13 @@ def test_jax_axis_protected_internals_rejects_insufficient_ndim() -> None:
 def test_validate_batch_sync_rejects_result_that_lost_protected_axes() -> None:
     """A result field with fewer dims than its protected-axis count is rejected."""
     with pytest.raises(ValueError, match="removed protected trailing axes"):
-        _validate_batch_sync({"array": jnp.array(5.0)}, {"array": 1})
+        _validate_batch_sync({"array": jnp.array(5.0)}, {"array": 1}, "array")
 
 
 def test_validate_batch_sync_rejects_mismatched_batch_shapes() -> None:
     """Result fields that disagree on batch shape are rejected."""
     with pytest.raises(ValueError, match="inconsistent batch-shapes"):
-        _validate_batch_sync({"left": jnp.ones((2, 3)), "right": jnp.ones((3, 3))}, {"left": 1, "right": 1})
+        _validate_batch_sync({"left": jnp.ones((2, 3)), "right": jnp.ones((3, 3))}, {"left": 1, "right": 1}, "left")
 
 
 def test_reduction_promotes_bare_scalar_result_to_array() -> None:

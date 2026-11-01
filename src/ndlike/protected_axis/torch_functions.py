@@ -288,7 +288,7 @@ def protected_batch_reduction_function(  # noqa: PLR0912
     if out is not None:
         return out
 
-    _validate_batch_sync(results, internals.protected_axes)
+    _validate_batch_sync(results, internals.protected_axes, internals.primary_name)
     return internals.create(results)
 
 
@@ -566,7 +566,7 @@ def protected_cat_function(
     if out is not None:
         return out
 
-    _validate_batch_sync(results, template.protected_axes)
+    _validate_batch_sync(results, template.protected_axes, template.primary_name)
     return template.create(results)
 
 
@@ -621,7 +621,7 @@ def protected_gather_function(
     if out is not None:
         return out
 
-    _validate_batch_sync(results, internals.protected_axes)
+    _validate_batch_sync(results, internals.protected_axes, internals.primary_name)
     return internals.create(results)
 
 
@@ -677,5 +677,5 @@ def protected_stack_function(
     if out is not None:
         return out
 
-    _validate_batch_sync(results, template.protected_axes)
+    _validate_batch_sync(results, template.protected_axes, template.primary_name)
     return template.create(results)

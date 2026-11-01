@@ -157,7 +157,7 @@ def test_validate_batch_sync_raises_when_ndim_drops() -> None:
     protected_axes = {"a": 1, "b": 1}
 
     with pytest.raises(ValueError, match="removed protected trailing axes"):
-        _validate_batch_sync(values, protected_axes)
+        _validate_batch_sync(values, protected_axes, "a")
 
 
 def test_validate_batch_sync_raises_when_batch_shapes_disagree() -> None:
@@ -166,7 +166,7 @@ def test_validate_batch_sync_raises_when_batch_shapes_disagree() -> None:
     protected_axes = {"a": 1, "b": 1}
 
     with pytest.raises(ValueError, match="inconsistent batch-shapes"):
-        _validate_batch_sync(values, protected_axes)
+        _validate_batch_sync(values, protected_axes, "a")
 
 
 # ---------------------------------------------------------------------------
@@ -379,6 +379,8 @@ def test_ufunc_reduce_with_raw_tuple_out() -> None:
 class _FakeProtected:
     """A duck-typed value that pretends to have malformed protected_axes."""
 
+    primary_protected_name: ClassVar[str] = "main"
+
     def __init__(self, protected_axes: dict[str, int]) -> None:
         self.protected_axes = protected_axes
         self.permitted_functions: set[Any] = set()
@@ -403,6 +405,7 @@ def test_internals_returns_none_when_value_ndim_too_small() -> None:
 
     class _BadNdim:
         protected_axes: ClassVar[dict[str, int]] = {"a": 2}
+        primary_protected_name: ClassVar[str] = "a"
         permitted_functions: ClassVar[set[Any]] = set()
 
         def protected_values(self, func: Any = None) -> dict[str, np.ndarray] | None:  # noqa: ANN401

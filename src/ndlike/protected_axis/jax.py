@@ -20,11 +20,13 @@ from ndlike.jax_functions import (
 from ndlike.jax_like import JaxLike, JaxLikeImplementation
 from ndlike.protected_axis._common_functions import (
     batch_shape,
+    primary_protected_name,
     protected_shape,
+    validate_batch_sync,
     value_ndim,
     value_shape,
 )
-from ndlike.protected_axis.jax_functions import jax_function
+from ndlike.protected_axis.jax_functions import _broadcast_batch, jax_function
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -45,6 +47,57 @@ def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
         raise ValueError(msg)
 
 
+def _is_basic_index(index: ToIndices) -> bool:
+    """Recognize shape-static basic indexing, including traced scalar integers."""
+    indices = index if isinstance(index, tuple) else (index,)
+    for item in indices:
+        if item is None or item is Ellipsis:
+            continue
+        if isinstance(item, slice):
+            if all(part is None or isinstance(part, (int, np.integer)) for part in (item.start, item.stop, item.step)):
+                continue
+            return False
+        if isinstance(item, (bool, np.bool_)):
+            return False
+        if isinstance(item, (int, np.integer)):
+            continue
+        if isinstance(item, (jax.Array, np.ndarray)) and item.ndim == 0 and np.issubdtype(item.dtype, np.integer):
+            continue
+        return False
+    return True
+
+
+def _normalize_broadcast_index(
+    index: ToIndices, value_batch_shape: tuple[int, ...], primary_batch_shape: tuple[int, ...]
+) -> tuple[Any, ...]:
+    """Project a known-basic logical batch index onto compact storage."""
+    index_tuple = index if isinstance(index, tuple) else (index,)
+    missing = len(primary_batch_shape) - sum(item is not None and item is not Ellipsis for item in index_tuple)
+    ellipses = sum(item is Ellipsis for item in index_tuple)
+    if missing < 0 or ellipses > 1:
+        msg = "Too many indices or ellipses for protected batch dimensions."
+        raise IndexError(msg)
+
+    normalized: list[Any] = []
+    for item in index_tuple:
+        normalized.extend((slice(None),) * missing if item is Ellipsis else (item,))
+    if ellipses == 0:
+        normalized.extend((slice(None),) * missing)
+
+    leading = len(primary_batch_shape) - len(value_batch_shape)
+    projected: list[Any] = []
+    axis = 0
+    for item in normalized:
+        if item is None:
+            projected.append(None)
+            continue
+        if axis >= leading:
+            shared = value_batch_shape[axis - leading] == 1 and primary_batch_shape[axis] != 1
+            projected.append((slice(None) if isinstance(item, slice) else 0) if shared else item)
+        axis += 1
+    return tuple(projected)
+
+
 class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementation[J], ABC):
     """ABC for representations with protected jax-like fields and optional NumPy sidecars.
 
@@ -61,10 +114,18 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
     dataclass fields are static metadata, subject to JAX's static-data rules.
     NumPy sidecars are eager-only: default pytree traversal rejects them rather
     than converting, freezing, or independently batching them.
+
+    Fields named in ``broadcasted_batch`` may store a batch shape broadcastable
+    to the first unmarked field's batch shape. Basic indexing and value-only
+    operations preserve compact storage; batch-shape-only operations also reuse
+    single-entry fields. Other dispatched operations expand storage. Pytrees expose the
+    stored values: native vmap maps physical child axes, not logical broadcasts.
     """
 
     protected_axes: ClassVar[dict[str, int]] = {}
+    broadcasted_batch: ClassVar[set[str]] = set()
     permitted_functions: ClassVar[set[Callable[..., Any]]] = set()
+    primary_protected_name: ClassVar[str]
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -88,6 +149,16 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
                 msg = f"{cls.__name__}.protected_axes refers to unknown field {name!r}."
                 raise TypeError(msg)
 
+        broadcasted_batch = cls.broadcasted_batch
+        if not isinstance(broadcasted_batch, set) or not broadcasted_batch <= axes.keys():
+            msg = f"{cls.__name__}.broadcasted_batch must be a set of protected field names."
+            raise TypeError(msg)
+        if not axes.keys() - broadcasted_batch:
+            msg = f"{cls.__name__} must have at least one protected field outside broadcasted_batch."
+            raise TypeError(msg)
+        cls.broadcasted_batch = set(broadcasted_batch)
+        cls.primary_protected_name = primary_protected_name(axes, broadcasted_batch)
+
         permitted_functions = getattr(cls, "permitted_functions", set())
         if not isinstance(permitted_functions, set) or not all(callable(func) for func in permitted_functions):
             msg = f"{cls.__name__}.permitted_functions must be a set of callables."
@@ -99,11 +170,6 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
     def _array_field_names(cls) -> tuple[str, ...]:
         """Select protected representation fields independently of pytree overrides."""
         return tuple(cls.protected_axes)
-
-    @classmethod
-    def primary_protected_name(cls) -> str:
-        """Return the first protected field (dict order)."""
-        return next(iter(cls.protected_axes))
 
     def _postprocess_protected_values[V: JaxProtectedValue](self, values: dict[str, V], func: Callable) -> dict[str, V]:
         """Optionally postprocess protected values based on the triggering function."""
@@ -126,24 +192,18 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
             return None
 
         values: dict[str, JaxProtectedValue] = {}
-        primary_name = type(self).primary_protected_name()
-        primary_batch: tuple[int, ...] | None = None
-
         for name, axes in type(self).protected_axes.items():
             value = cast("JaxProtectedValue", getattr(self, name))
             ndim = value_ndim(value)
-            shape = value_shape(value)
             _validate_field_ndim(name, ndim, axes)
-
-            current_batch = batch_shape(shape, axes)
-            if name == primary_name:
-                primary_batch = current_batch
-            elif primary_batch is not None and current_batch != primary_batch:
-                msg = "Protected fields do not share the same batch-shape."
-                raise ValueError(msg)
-
             values[name] = value
 
+        validate_batch_sync(
+            values,
+            type(self).protected_axes,
+            type(self).primary_protected_name,
+            type(self).broadcasted_batch,
+        )
         if func is not None:
             values = self._postprocess_protected_values(values, func)
 
@@ -151,7 +211,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
 
     def protected_value(self) -> JaxProtectedValue:
         """Return the primary protected value."""
-        primary_name = type(self).primary_protected_name()
+        primary_name = type(self).primary_protected_name
         return self.protected_values()[primary_name]
 
     def _jax_protected_value(self) -> JaxLike[Any] | jax.Array:
@@ -217,14 +277,14 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
     @override
     @property
     def shape(self) -> tuple[int, ...]:
-        primary_name = type(self).primary_protected_name()
+        primary_name = type(self).primary_protected_name
         axes = type(self).protected_axes[primary_name]
         return batch_shape(value_shape(self.protected_value()), axes)
 
     @property
     def protected_shape(self) -> tuple[int, ...]:
         """Protected trailing shape of the primary field."""
-        primary_name = type(self).primary_protected_name()
+        primary_name = type(self).primary_protected_name
         axes = type(self).protected_axes[primary_name]
         return protected_shape(value_shape(self.protected_value()), axes)
 
@@ -245,6 +305,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
         return jax_conj(self.mT)
 
     def _index_with_protected_axes(self, index: ToIndices, protected_axes_count: int) -> tuple[Any, ...]:
+        """Append full slices for the protected trailing axes."""
         index_tuple = index if isinstance(index, tuple) else (index,)
         return (*index_tuple, *(slice(None),) * protected_axes_count)
 
@@ -288,10 +349,24 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
         """Return a copy with the indexed batch slice of every protected field."""
         values = self.protected_values()
         indexed: dict[str, JaxProtectedValue] = {}
+        primary_name = type(self).primary_protected_name
+        primary_batch = batch_shape(value_shape(values[primary_name]), type(self).protected_axes[primary_name])
+        basic: bool | None = None
 
         for name, axes in type(self).protected_axes.items():
-            full_index = self._index_with_protected_axes(index, axes)
             value = values[name]
+            field_index = index
+            if (
+                name in type(self).broadcasted_batch
+                and (value_batch := batch_shape(value_shape(value), axes)) != primary_batch
+            ):
+                if basic is None:
+                    basic = _is_basic_index(index)
+                if basic:
+                    field_index = _normalize_broadcast_index(index, value_batch, primary_batch)
+                else:
+                    value = _broadcast_batch(value, axes, primary_batch)
+            full_index = self._index_with_protected_axes(field_index, axes)
             result = cast("Any", value)[full_index]
 
             if axes == 0 and not hasattr(result, "ndim"):
@@ -308,6 +383,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
 
             indexed[name] = cast("JaxProtectedValue", result)
 
+        validate_batch_sync(indexed, type(self).protected_axes, primary_name, type(self).broadcasted_batch)
         return self.with_protected_values(indexed)
 
     def _scatter_protected_values(
@@ -321,24 +397,28 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
         values = self.protected_values()
         candidate_values = self._coerce_assignment_value(value, validate_shape=method == "set")
         updates: dict[str, JaxProtectedValue] = {}
+        primary_name = type(self).primary_protected_name
+        primary_batch = batch_shape(value_shape(values[primary_name]), type(self).protected_axes[primary_name])
 
         for name, axes in type(self).protected_axes.items():
+            value = values[name]
+            if name in type(self).broadcasted_batch and batch_shape(value_shape(value), axes) != primary_batch:
+                value = _broadcast_batch(value, axes, primary_batch)
             full_index = self._index_with_protected_axes(index, axes)
-            field = values[name]
 
-            if isinstance(field, np.ndarray):
+            if isinstance(value, np.ndarray):
                 if method != "set":
                     msg = f"Indexed update {method!r} is not supported for NumPy field {name!r}."
                     raise TypeError(msg)
                 candidate = candidate_values[name]
-                if field.dtype == object and isinstance(candidate, np.ndarray) and candidate.ndim == 0:
+                if value.dtype == object and isinstance(candidate, np.ndarray) and candidate.ndim == 0:
                     candidate = cast("Any", candidate).item()
-                copied = field.copy()
+                copied = value.copy()
                 copied[full_index] = candidate
                 updates[name] = copied
                 continue
 
-            updated = getattr(cast("Any", field).at[full_index], method)(candidate_values[name], **kwargs)
+            updated = getattr(cast("Any", value).at[full_index], method)(candidate_values[name], **kwargs)
             updates[name] = cast("JaxProtectedValue", updated)
 
         return self.with_protected_values(updates)

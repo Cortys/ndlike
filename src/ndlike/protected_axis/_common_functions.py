@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import wraps
 from inspect import BoundArguments, signature
-from typing import TYPE_CHECKING, Any, Protocol, cast, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast, overload, runtime_checkable
 
 import numpy as np
 
@@ -26,6 +26,7 @@ class SupportsProtectedInternals[V, R](Protocol):
     """Structural interface for reading and rebuilding protected-axis values."""
 
     protected_axes: dict[str, int]
+    primary_protected_name: ClassVar[str]
     permitted_functions: set[Callable[..., Any]]
 
     @overload
@@ -52,6 +53,7 @@ class AxisProtectedInternals[V, R]:
     protected_axes: dict[str, int]
     primary_name: str
     owner_type: type[Any]
+    broadcasted_batch: frozenset[str] = frozenset()
 
     @property
     def primary_value(self) -> V:
@@ -62,6 +64,11 @@ class AxisProtectedInternals[V, R]:
     def batch_ndim(self) -> int:
         """Return the number of batch dimensions of the primary value."""
         return value_ndim(self.primary_value) - self.protected_axes[self.primary_name]
+
+    @property
+    def batch_shape(self) -> tuple[int, ...]:
+        """Return the logical batch shape from the primary value."""
+        return batch_shape(value_shape(self.primary_value), self.protected_axes[self.primary_name])
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,18 +120,32 @@ def extract_axis_protected_internals[V, R](
     def create(values: dict[str, V]) -> R:
         return obj.with_protected_values(values, func)
 
+    broadcasted_batch = frozenset(getattr(obj, "broadcasted_batch", ()))
     return AxisProtectedInternals(
         create=create,
         values=dict(values),
         protected_axes=dict(protected_axes),
-        primary_name=next(iter(protected_axes)),
+        primary_name=obj.primary_protected_name,
         owner_type=type(obj),
+        broadcasted_batch=broadcasted_batch,
     )
 
 
-def validate_batch_sync(values: Mapping[str, object], protected_axes: Mapping[str, int]) -> None:
-    """Validate that results retain protected axes and share a batch shape."""
-    expected: tuple[int, ...] | None = None
+def primary_protected_name(
+    protected_axes: Mapping[str, int], broadcasted_batch: set[str] | frozenset[str] = frozenset()
+) -> str:
+    """Select the first field whose batch shape is not permitted to broadcast."""
+    return next(name for name in protected_axes if name not in broadcasted_batch)
+
+
+def validate_batch_sync(
+    values: Mapping[str, object],
+    protected_axes: Mapping[str, int],
+    primary_name: str,
+    broadcasted_batch: set[str] | frozenset[str] = frozenset(),
+) -> None:
+    """Validate protected axes and exact or explicitly broadcastable batch shapes."""
+    shapes: dict[str, tuple[int, ...]] = {}
     for name, value in values.items():
         axes = protected_axes[name]
         ndim = value_ndim(value)
@@ -132,9 +153,18 @@ def validate_batch_sync(values: Mapping[str, object], protected_axes: Mapping[st
         if ndim < axes:
             msg = f"Operation removed protected trailing axes for field {name!r}."
             raise ValueError(msg)
-        current = batch_shape(shape, axes)
-        if expected is None:
-            expected = current
+        shapes[name] = batch_shape(shape, axes)
+
+    if not shapes:
+        return
+    expected = shapes[primary_name]
+    for name, current in shapes.items():
+        if name in broadcasted_batch:
+            if len(current) > len(expected) or any(
+                size not in (1, target) for size, target in zip(reversed(current), reversed(expected), strict=False)
+            ):
+                msg = f"Batch shape {current} of field {name!r} cannot broadcast to primary batch shape {expected}."
+                raise ValueError(msg)
         elif current != expected:
             msg = "Operation produced inconsistent batch-shapes across protected fields."
             raise ValueError(msg)
@@ -143,7 +173,7 @@ def validate_batch_sync(values: Mapping[str, object], protected_axes: Mapping[st
 def apply_unary[V, R](internals: AxisProtectedInternals[V, R], op: Callable[[str, V, int], V]) -> R:
     """Transform protected fields, validate their batch shapes, and rebuild."""
     results = {name: op(name, value, internals.protected_axes[name]) for name, value in internals.values.items()}
-    validate_batch_sync(results, internals.protected_axes)
+    validate_batch_sync(results, internals.protected_axes, internals.primary_name, internals.broadcasted_batch)
     return internals.create(results)
 
 
@@ -183,6 +213,9 @@ def extract_protected_value_sequence_internals[V, R](
             values_by_field = {name: [] for name in internals.protected_axes}
         elif internals.protected_axes != template.protected_axes:
             msg = "All protected inputs must share identical protected_axes definitions."
+            raise ValueError(msg)
+        elif internals.broadcasted_batch != template.broadcasted_batch:
+            msg = "All protected inputs must share identical broadcasted_batch definitions."
             raise ValueError(msg)
 
         for name in template.protected_axes:

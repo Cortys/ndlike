@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+import math
 from typing import TYPE_CHECKING, Any, cast
 
 from flextype import switchdispatch
@@ -41,6 +43,7 @@ from ndlike.protected_axis._common_functions import (
     SupportsProtectedInternals,
     apply_structural_op as _apply_structural_op,
     apply_unary as _apply_unary,
+    batch_shape,
     extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
     function_override as jax_function_override,
@@ -69,18 +72,91 @@ type JaxAxisProtectedInternals = AxisProtectedInternals[JaxProtectedValue, Any]
 type _JaxBoundFunctionWithInternals = BoundFunctionWithInternals[JaxProtectedValue, Any]
 
 
+_VALUE_ONLY = frozenset((jax_copy, jax_astype, jax_conj))
+_SHAPE_ONLY = frozenset(
+    (
+        jax_reshape,
+        jax_moveaxis,
+        jax_swapaxes,
+        jax_squeeze,
+        jax_expand_dims,
+        jax_matrix_transpose,
+        jax_transpose,
+        jax_broadcast_to,
+    )
+)
+
+
+def _broadcast_batch(
+    value: JaxProtectedValue, protected_axes_count: int, batch_shape: tuple[int, ...]
+) -> JaxProtectedValue:
+    """Materialize a field's batch broadcast without changing protected axes."""
+    target = (*batch_shape, *protected_shape(value_shape(value), protected_axes_count))
+    if value_shape(value) == target:
+        return value
+    return _apply_structural_op(
+        value,
+        lambda field_value: jax_broadcast_to(cast("Any", field_value), target),
+        lambda field_value: np.broadcast_to(field_value, target),
+    )
+
+
 def jax_axis_protected_internals(
     obj: object, func: Callable | None = None, *, check_is_permitted: bool = False
 ) -> JaxAxisProtectedInternals | None:
-    """Extract protected-axis internals from object."""
+    """Prepare fields, keeping value-only storage and single-entry shape-only fields compact.
+
+    Shape-only single-entry fields are normalized to batch shape ``()`` so they
+    remain broadcastable when the operation changes the logical batch rank.
+    """
     if not isinstance(obj, SupportsProtectedInternals):
         return None
     # Dispatch establishes the value family; runtime protocol checks only test members.
-    return extract_axis_protected_internals(
+    internals = extract_axis_protected_internals(
         cast("SupportsProtectedInternals[JaxProtectedValue, Any]", obj),
         func,
         check_is_permitted=check_is_permitted,
     )
+    if internals is None or not internals.broadcasted_batch or func in _VALUE_ONLY:
+        return internals
+
+    values = {}
+    for name, value in internals.values.items():
+        axes = internals.protected_axes[name]
+        if (
+            func in _SHAPE_ONLY
+            and name in internals.broadcasted_batch
+            and math.prod(batch_shape(value_shape(value), axes)) == 1
+        ):
+            suffix = protected_shape(value_shape(value), axes)
+            values[name] = (
+                value
+                if value_ndim(value) == axes
+                else _apply_structural_op(
+                    value,
+                    lambda field_value, target=suffix: jax_reshape(cast("Any", field_value), target),
+                    lambda field_value, target=suffix: np.reshape(field_value, target),
+                )
+            )
+        else:
+            values[name] = _broadcast_batch(value, axes, internals.batch_shape)
+    return replace(internals, values=values)
+
+
+def _apply_shape_only(
+    internals: JaxAxisProtectedInternals,
+    op: Callable[[str, JaxProtectedValue, int], JaxProtectedValue],
+) -> Any:  # noqa: ANN401
+    """Apply a batch-shape operation, reusing fields normalized to batch shape ``()``."""
+    if not internals.broadcasted_batch:
+        return _apply_unary(internals, op)
+
+    def field_op(name: str, value: JaxProtectedValue, axes: int) -> JaxProtectedValue:
+        if name in internals.broadcasted_batch and value_ndim(value) == axes:
+            return value
+        return op(name, value, axes)
+
+    return _apply_unary(internals, field_op)
 
 
 def _extract_protected_value_sequence_internals(
@@ -207,7 +283,7 @@ def protected_batch_reduction_function(
 
         results[name] = cast("JaxProtectedValue", result)
 
-    _validate_batch_sync(results, internals.protected_axes)
+    _validate_batch_sync(results, internals.protected_axes, internals.primary_name, internals.broadcasted_batch)
     return internals.create(results)
 
 
@@ -239,7 +315,7 @@ def protected_transpose_function(
             lambda field_value: np.transpose(field_value, axes=full_axes),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @jax_function.register(jax_matrix_transpose)
@@ -266,7 +342,7 @@ def protected_matrix_transpose_function(
             lambda field_value: np.transpose(field_value, axes=full_axes),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @jax_function.register(jax_reshape)
@@ -290,16 +366,18 @@ def protected_reshape_function(
 
     order = params.arguments.get("order", "C")
     copy = params.arguments.get("copy", None)
+    kwargs: dict[str, object] = {"order": order}
+    if copy is not None:
+        kwargs["copy"] = copy
 
-    def op(_name: str, value: JaxProtectedValue, axes_count: int) -> JaxProtectedValue:
-        target_shape = (*batch_target_shape, *protected_shape(value_shape(value), axes_count))
-        kwargs: dict[str, object] = {"order": order}
-        if copy is not None:
-            kwargs["copy"] = copy
+    def op(name: str, value: JaxProtectedValue, axes_count: int) -> JaxProtectedValue:
+        suffix = protected_shape(value_shape(value), axes_count)
+        single_entry = name in internals.broadcasted_batch and value_ndim(value) == axes_count
+        target_shape = suffix if single_entry else (*batch_target_shape, *suffix)
         return _apply_structural_op(
             value,
             lambda field_value: func(field_value, target_shape, **kwargs),
-            lambda field_value: np.reshape(field_value, target_shape, order=order),
+            lambda field_value: np.reshape(field_value, target_shape, order=order, copy=copy),
         )
 
     return _apply_unary(internals, op)
@@ -323,7 +401,7 @@ def protected_broadcast_to_function(
             lambda field_value: np.broadcast_to(field_value, target),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @jax_function.register(jax_expand_dims)
@@ -351,7 +429,7 @@ def protected_expand_dims_function(
             lambda field_value: np.expand_dims(field_value, axis=full_axes),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @jax_function.register(jax_squeeze)
@@ -391,7 +469,7 @@ def protected_squeeze_function(
             lambda field_value: np.squeeze(field_value, axis=squeeze_axes),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @jax_function.register(jax_swapaxes)
@@ -417,7 +495,7 @@ def protected_swapaxes_function(
             lambda field_value: np.swapaxes(field_value, full_axis1, full_axis2),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @jax_function.register(jax_moveaxis)
@@ -462,7 +540,7 @@ def protected_moveaxis_function(
             lambda field_value: np.moveaxis(field_value, source_arg, destination_arg),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @jax_function.register(jax_concatenate)
@@ -513,7 +591,7 @@ def protected_concatenate_function(
 
         results[name] = cast("JaxProtectedValue", result)
 
-    _validate_batch_sync(results, template.protected_axes)
+    _validate_batch_sync(results, template.protected_axes, template.primary_name, template.broadcasted_batch)
     return template.create(results)
 
 
@@ -556,7 +634,7 @@ def protected_stack_function(
             result = func(field_values, axis=mapped_axis, dtype=dtype)
         results[name] = result
 
-    _validate_batch_sync(results, template.protected_axes)
+    _validate_batch_sync(results, template.protected_axes, template.primary_name, template.broadcasted_batch)
     return template.create(results)
 
 
@@ -594,7 +672,7 @@ def protected_take_along_axis_function(
 
         results[name] = func(value, field_index, mapped_axis, mode=mode, fill_value=fill_value)
 
-    _validate_batch_sync(results, internals.protected_axes)
+    _validate_batch_sync(results, internals.protected_axes, internals.primary_name, internals.broadcasted_batch)
     return internals.create(results)
 
 
@@ -668,7 +746,7 @@ def _validate_operator_result(values: dict[str, Any], template: JaxAxisProtected
     if values.keys() != template.values.keys():
         msg = "Operator results must contain every protected field."
         raise ValueError(msg)
-    _validate_batch_sync(values, template.protected_axes)
+    _validate_batch_sync(values, template.protected_axes, template.primary_name, template.broadcasted_batch)
     for name, axes in template.protected_axes.items():
         if protected_shape(value_shape(values[name]), axes) != protected_shape(
             value_shape(template.values[name]), axes

@@ -40,6 +40,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
 
     protected_axes: ClassVar[dict[str, int]] = {}
     permitted_functions: ClassVar[set[Callable[..., Any]]] = set()
+    primary_protected_name: ClassVar[str]
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -63,16 +64,13 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
                 msg = f"{cls.__name__}.protected_axes refers to unknown field {name!r}."
                 raise TypeError(msg)
 
+        cls.primary_protected_name = next(iter(axes))
+
         permitted_functions = getattr(cls, "permitted_functions", set())
         if not isinstance(permitted_functions, set) or not all(callable(func) for func in permitted_functions):
             msg = f"{cls.__name__}.permitted_functions must be a set of callables."
             raise TypeError(msg)
         cls.permitted_functions = set(permitted_functions)
-
-    @classmethod
-    def primary_protected_name(cls) -> str:
-        """Return the first protected field (dict order)."""
-        return next(iter(cls.protected_axes))
 
     def _postprocess_protected_values[V: TorchProtectedValue](
         self, values: dict[str, V], func: Callable
@@ -97,7 +95,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
             return None
 
         values: dict[str, TorchProtectedValue] = {}
-        primary_name = type(self).primary_protected_name()
+        primary_name = type(self).primary_protected_name
         primary_batch: tuple[int, ...] | None = None
 
         for name, axes in type(self).protected_axes.items():
@@ -122,7 +120,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
 
     def protected_value(self) -> TorchProtectedValue:
         """Return the primary protected value."""
-        primary_name = type(self).primary_protected_name()
+        primary_name = type(self).primary_protected_name
         return self.protected_values()[primary_name]
 
     def _torch_protected_value(self) -> TorchLike[Any] | torch.Tensor:
@@ -184,14 +182,14 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
     @override
     @property
     def shape(self) -> tuple[int, ...]:
-        primary_name = type(self).primary_protected_name()
+        primary_name = type(self).primary_protected_name
         axes = type(self).protected_axes[primary_name]
         return batch_shape(value_shape(self.protected_value()), axes)
 
     @property
     def protected_shape(self) -> tuple[int, ...]:
         """Protected trailing shape of the primary field."""
-        primary_name = type(self).primary_protected_name()
+        primary_name = type(self).primary_protected_name
         axes = type(self).protected_axes[primary_name]
         return protected_shape(value_shape(self.protected_value()), axes)
 

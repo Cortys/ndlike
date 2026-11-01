@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from importlib import import_module
+from inspect import Parameter, signature
 from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Any, overload
+from typing import Any, ClassVar, overload
 
 import pytest
 
@@ -17,6 +19,7 @@ from ndlike.protected_axis._common_functions import (
     apply_unary,
     extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
+    validate_batch_sync,
 )
 
 
@@ -46,6 +49,7 @@ class _Rebuilt:
 @dataclass
 class _Protected:
     values: dict[str, _Value]
+    primary_protected_name: ClassVar[str] = "left"
     protected_axes: dict[str, int] = field(default_factory=lambda: {"left": 1, "right": 0})
     permitted_functions: set[Callable[..., Any]] = field(default_factory=lambda: {_allowed})
     read_contexts: list[Callable | None] = field(default_factory=list)
@@ -150,6 +154,49 @@ def test_sequence_rejects_mismatched_layouts() -> None:
     second = _Protected({"left": _Value((2, 3))}, protected_axes={"left": 0})
     with pytest.raises(ValueError, match="identical protected_axes"):
         extract_protected_value_sequence_internals((first, second), extract=_extract)
+
+
+@pytest.mark.parametrize("backend", ["numpy", "torch", "jax"])
+@pytest.mark.parametrize("slots", [False, True])
+def test_primary_name_is_a_precomputed_class_attribute(backend: str, slots: bool, monkeypatch) -> None:
+    pytest.importorskip(backend)
+    module = import_module(f"ndlike.protected_axis.{backend}")
+    base = getattr(module, f"{backend.title()}AxisProtected")
+
+    @dataclass(frozen=True, slots=slots)
+    class Pair(base):
+        first: Any
+        second: Any
+        protected_axes: ClassVar[dict[str, int]] = {"first": 0, "second": 0}
+
+    @dataclass(frozen=True, slots=slots)
+    class ReorderedPair(Pair):
+        first: Any
+        second: Any
+        protected_axes: ClassVar[dict[str, int]] = {"second": 0, "first": 0}
+
+    def unexpected_selection(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Primary-field selection must only run when defining the class.")
+
+    monkeypatch.setattr("ndlike.protected_axis._common_functions.primary_protected_name", unexpected_selection)
+    assert Pair.primary_protected_name == "first"
+    assert ReorderedPair.primary_protected_name == "second"
+    first, second = _Value((2, 3)), _Value((2, 3))
+    obj = ReorderedPair(first, second)
+    assert obj.primary_protected_name == "second"
+    assert obj.shape == (2, 3)
+    internals = extract_axis_protected_internals(obj)
+    assert internals is not None
+    assert internals.primary_name == "second"
+    assert internals.primary_value is second
+    rebuilt = apply_unary(internals, lambda _name, value, _axes: value)
+    assert rebuilt.primary_protected_name == "second"
+
+
+def test_batch_validation_requires_primary_name() -> None:
+    parameter = signature(validate_batch_sync).parameters["primary_name"]
+    assert parameter.default is Parameter.empty
+    assert parameter.kind is Parameter.POSITIONAL_OR_KEYWORD
 
 
 def test_generic_type_contracts(tmp_path: Path) -> None:

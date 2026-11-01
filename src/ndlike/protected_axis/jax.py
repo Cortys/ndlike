@@ -177,13 +177,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
         func: Callable | None = None,  # noqa: ARG002
     ) -> JaxAxisProtected[J]:
         """Return a copy with updated protected field values."""
-        current_values = self.protected_values()
-        updates: dict[str, object] = {}
-
-        for name in type(self).protected_axes:
-            updates[name] = values.get(name, current_values[name])
-
-        return replace(self, **updates)  # ty:ignore[invalid-argument-type]
+        return replace(self, **values)  # ty:ignore[invalid-argument-type]
 
     @override
     def __len__(self) -> int:

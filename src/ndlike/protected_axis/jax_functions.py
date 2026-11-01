@@ -13,6 +13,7 @@ from ndlike import jax_functions as jf
 from ndlike.jax_functions import (
     jax_astype,
     jax_average,
+    jax_broadcast_to,
     jax_concatenate,
     jax_conj,
     jax_copy,
@@ -299,6 +300,27 @@ def protected_reshape_function(
             value,
             lambda field_value: func(field_value, target_shape, **kwargs),
             lambda field_value: np.reshape(field_value, target_shape, order=order),
+        )
+
+    return _apply_unary(internals, op)
+
+
+@jax_function.register(jax_broadcast_to)
+@_jax_internals_override("array")
+def protected_broadcast_to_function(
+    func: Callable,
+    params: BoundArguments,
+    internals: JaxAxisProtectedInternals,
+) -> Any:  # noqa: ANN401
+    """Broadcast visible batch axes without changing protected trailing axes."""
+    shape = tuple(params.arguments["shape"])
+
+    def op(_name: str, value: JaxProtectedValue, axes_count: int) -> JaxProtectedValue:
+        target = (*shape, *protected_shape(value_shape(value), axes_count))
+        return _apply_structural_op(
+            value,
+            lambda field_value: func(field_value, target),
+            lambda field_value: np.broadcast_to(field_value, target),
         )
 
     return _apply_unary(internals, op)

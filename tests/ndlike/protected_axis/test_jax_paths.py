@@ -728,6 +728,18 @@ def test_with_protected_values_keeps_unlisted_fields() -> None:
     assert y.right is x.right
 
 
+def test_with_protected_values_can_repair_desynced_batch_shapes() -> None:
+    """Reconstruction does not validate the old values before replacing them."""
+    x = _PairArrayProtected(jnp.zeros((2, 4)), jnp.ones((3, 4)))
+    right = jnp.ones((2, 4))
+
+    y = x.with_protected_values({"right": right})
+
+    assert y.left is x.left
+    assert y.right is right
+    assert y.shape == (2,)
+
+
 # ---------------------------------------------------------------------------
 # Error paths.
 # ---------------------------------------------------------------------------

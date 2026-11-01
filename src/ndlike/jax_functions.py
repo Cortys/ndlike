@@ -587,6 +587,20 @@ def jax_invert(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     return jnp.invert(x)  # ty: ignore[invalid-argument-type]
 
 
+@jax_function_dispatch("array")
+def jax_broadcast_to(array: _JaxFamily | JaxArrayLike, shape: Sequence[int]) -> jax.Array | _JaxFamily:
+    """Broadcast an array to a shape, preserving custom array dispatch.
+
+    Args:
+        array: Array to broadcast.
+        shape: Requested logical shape.
+
+    Returns:
+        The broadcasted array, or the result supplied by a custom override.
+    """
+    return jnp.broadcast_to(array, shape)  # ty: ignore[invalid-argument-type]
+
+
 @overload
 def jax_reshape(
     a: JaxArrayLike,
@@ -987,6 +1001,7 @@ __all__ = [
     "jax_bitwise_and",
     "jax_bitwise_or",
     "jax_bitwise_xor",
+    "jax_broadcast_to",
     "jax_concatenate",
     "jax_conj",
     "jax_copy",

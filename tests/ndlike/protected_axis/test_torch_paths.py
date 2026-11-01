@@ -88,6 +88,34 @@ def test_torch_protected_values_with_unpermitted_func_returns_none() -> None:
 
 
 # ---------------------------------------------------------------------------
+# with_protected_values: reconstruction.
+# ---------------------------------------------------------------------------
+
+
+def test_with_protected_values_keeps_unlisted_fields() -> None:
+    """Fields absent from the update dict keep their current value."""
+    x = _PairTensorProtected(torch.zeros((2, 4)), torch.ones((2, 4)))
+    left = torch.full((2, 4), 7.0)
+
+    y = x.with_protected_values({"left": left})
+
+    assert y.left is left
+    assert y.right is x.right
+
+
+def test_with_protected_values_can_repair_desynced_batch_shapes() -> None:
+    """Reconstruction does not validate the old values before replacing them."""
+    x = _PairTensorProtected(torch.zeros((2, 4)), torch.ones((3, 4)))
+    right = torch.ones((2, 4))
+
+    y = x.with_protected_values({"right": right})
+
+    assert y.left is x.left
+    assert y.right is right
+    assert y.shape == (2,)
+
+
+# ---------------------------------------------------------------------------
 # _torch_protected_value: must find at least one tensor field.
 # ---------------------------------------------------------------------------
 

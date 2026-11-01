@@ -104,6 +104,25 @@ The corresponding backend classes are `TorchAxisProtected` in
 `ndlike.protected_axis.torch` and `JaxAxisProtected` in
 `ndlike.protected_axis.jax`.
 
+### Preparing assignments
+
+NumPy and Torch protected types can override
+`_prepare_assignment_value(self, value)` to convert an incoming value to the
+destination's metadata convention or raise if incompatible. The default returns
+the value unchanged. Preparation runs before field extraction and protected-shape
+validation; return the original value or a converted replacement without mutating
+the supplied object. Destination metadata is retained. For example, a type with
+coordinate-frame metadata can return `value.to_frame(self.frame)`.
+
+JAX uses `_prepare_assignment_value(self, value, *, method)` for `.at[index]`
+updates. Import `JaxAtMethod` from `ndlike.protected_axis.jax` to annotate
+`permitted_at_methods: ClassVar[set[JaxAtMethod]] = {"set"}`. This enables replacement
+by default; add names such as `"add"` or `"max"` to opt into other indexed updates,
+or use an empty set to disable updates. These permissions are independent of
+`permitted_functions` and are checked before preparation. The hook receives the
+update method, and the prepared operand is applied using native fieldwise scatter
+semantics. `.at[index].get()` follows ordinary indexing.
+
 ## JAX function dispatch
 
 JAX has no native equivalent of NumPy's `__array_function__`. For custom objects,

@@ -15,7 +15,7 @@ import jax.numpy as jnp
 
 from ndlike import jax_functions as jf
 from ndlike.protected_axis import jax as protected_jax
-from ndlike.protected_axis.jax import JaxAxisProtected
+from ndlike.protected_axis.jax import JaxAtMethod, JaxAxisProtected
 from ndlike.protected_axis.jax_functions import jax_axis_protected_internals
 
 _PERMITTED = {
@@ -39,6 +39,7 @@ class _Shared(JaxAxisProtected[Any]):
     protected_axes: ClassVar[dict[str, int]] = {"shared": 1, "values": 1}
     broadcasted_batch: ClassVar[set[str]] = {"shared"}
     permitted_functions: ClassVar[set] = _PERMITTED
+    permitted_at_methods: ClassVar[set[JaxAtMethod]] = {"set", "add", "multiply"}
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class _SharedScalar(JaxAxisProtected[Any]):
     protected_axes: ClassVar[dict[str, int]] = {"shared": 0, "values": 1}
     broadcasted_batch: ClassVar[set[str]] = {"shared"}
     permitted_functions: ClassVar[set] = _PERMITTED
+    permitted_at_methods: ClassVar[set[JaxAtMethod]] = {"set", "add"}
 
 
 @dataclass(frozen=True)

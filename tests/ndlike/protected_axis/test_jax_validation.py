@@ -12,6 +12,7 @@ import jax
 from jax import numpy as jnp
 
 from ndlike.protected_axis.jax import (
+    JaxAtMethod,
     JaxAxisProtected,
     _validate_field_ndim,
 )
@@ -103,3 +104,34 @@ def test_jax_subclass_rejects_non_callable_in_permitted_functions() -> None:
             array: jax.Array
             protected_axes: ClassVar[dict[str, int]] = {"array": 1}
             permitted_functions: ClassVar[set[Any]] = {"not-callable"}
+
+
+@pytest.mark.parametrize("methods", [["set"], {"get"}, {"apply"}, {"unknown"}, {1}, None])
+def test_jax_subclass_rejects_invalid_permitted_at_methods(methods):
+    with pytest.raises(TypeError, match="permitted_at_methods must be a set of supported"):
+
+        @dataclass(frozen=True)
+        class Invalid(JaxAxisProtected[jax.Array]):
+            array: jax.Array
+            protected_axes: ClassVar[dict[str, int]] = {"array": 1}
+            permitted_at_methods: ClassVar[Any] = methods
+
+
+def test_jax_subclass_copies_indexed_update_permissions():
+    methods: set[JaxAtMethod] = {"set", "add"}
+
+    @dataclass(frozen=True)
+    class Parent(JaxAxisProtected[jax.Array]):
+        array: jax.Array
+        protected_axes: ClassVar[dict[str, int]] = {"array": 1}
+        permitted_at_methods: ClassVar[set[JaxAtMethod]] = methods
+
+    @dataclass(frozen=True)
+    class Child(Parent):
+        array: jax.Array
+
+    Child.permitted_at_methods.add("multiply")
+    assert Child.permitted_at_methods == {"set", "add", "multiply"}
+    assert Parent.permitted_at_methods == methods == {"set", "add"}
+    assert Parent.permitted_at_methods is not methods
+    assert JaxAxisProtected.permitted_at_methods == {"set"}

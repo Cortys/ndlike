@@ -213,6 +213,15 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
         index_tuple = index if isinstance(index, tuple) else (index,)
         return (*index_tuple, *(slice(None),) * protected_axes_count)
 
+    def _prepare_assignment_value(self, value: object) -> object:
+        """Prepare a replacement value before field extraction and shape validation.
+
+        Subclasses may convert the value to match destination metadata or raise
+        if incompatible. Return the original value or a converted replacement
+        without mutating the supplied object. Assignment retains destination metadata.
+        """
+        return value
+
     def _coerce_assignment_value(self, value: object) -> Mapping[str, object]:
         field_names = tuple(type(self).protected_axes.keys())
 
@@ -276,6 +285,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
 
     @override
     def __setitem__(self, index: ToIndices, value: object, /) -> None:
+        value = self._prepare_assignment_value(value)
         values = self.protected_values()
         candidate_values = self._coerce_assignment_value(value)
 

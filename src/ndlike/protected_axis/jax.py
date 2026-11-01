@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC
 from dataclasses import dataclass, replace
 from inspect import isabstract
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, overload, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast, overload, override
 
 import jax
 from jax import numpy as jnp
@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
 
 type JaxProtectedValue = JaxLike[Any] | jax.Array | np.ndarray
+type JaxAtMethod = Literal["set", "add", "subtract", "multiply", "divide", "power", "min", "max"]
 
 
 def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
@@ -110,6 +111,11 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
     Matrix multiplication acts on visible batch axes independently at each
     protected coordinate. NumPy sidecars are not supported by these operators.
 
+    Indexed updates are independently controlled by ``permitted_at_methods``,
+    which defaults to ``{"set"}``. Override ``_prepare_assignment_value`` to
+    convert or reject an update operand based on its metadata and update method.
+    Updates use native fieldwise scatter semantics and retain destination metadata.
+
     Protected fields are automatically declared as pytree children; other
     dataclass fields are static metadata, subject to JAX's static-data rules.
     NumPy sidecars are eager-only: default pytree traversal rejects them rather
@@ -125,6 +131,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
     protected_axes: ClassVar[dict[str, int]] = {}
     broadcasted_batch: ClassVar[set[str]] = set()
     permitted_functions: ClassVar[set[Callable[..., Any]]] = set()
+    permitted_at_methods: ClassVar[set[JaxAtMethod]] = {"set"}
     primary_protected_name: ClassVar[str]
 
     def __init_subclass__(cls, **kwargs: object) -> None:
@@ -164,6 +171,21 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
             msg = f"{cls.__name__}.permitted_functions must be a set of callables."
             raise TypeError(msg)
         cls.permitted_functions = set(permitted_functions)
+
+        permitted_at_methods = cls.permitted_at_methods
+        if not isinstance(permitted_at_methods, set) or not permitted_at_methods <= {
+            "set",
+            "add",
+            "subtract",
+            "multiply",
+            "divide",
+            "power",
+            "min",
+            "max",
+        }:
+            msg = f"{cls.__name__}.permitted_at_methods must be a set of supported indexed update method names."
+            raise TypeError(msg)
+        cls.permitted_at_methods = set(permitted_at_methods)
         cls.pytree_children = tuple(axes)
 
     @classmethod
@@ -309,6 +331,17 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
         index_tuple = index if isinstance(index, tuple) else (index,)
         return (*index_tuple, *(slice(None),) * protected_axes_count)
 
+    def _prepare_assignment_value(self, value: object, *, method: JaxAtMethod) -> object:
+        """Prepare an indexed-update operand before field extraction and validation.
+
+        Called only for permitted methods. Subclasses may convert the operand to
+        match destination metadata or raise if incompatible. Return the original
+        value or a converted replacement without mutating the supplied object.
+        The update retains destination metadata and uses native fieldwise semantics.
+        """
+        del method
+        return value
+
     def _coerce_assignment_value(self, value: object, *, validate_shape: bool = True) -> Mapping[str, object]:
         field_names = tuple(type(self).protected_axes.keys())
 
@@ -389,11 +422,16 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
     def _scatter_protected_values(
         self,
         index: ToIndices,
-        method: str,
+        method: JaxAtMethod,
         value: object,
         kwargs: dict[str, Any],
     ) -> JaxAxisProtected[J]:
         """Return a copy with an out-of-place ``jax.Array.at`` update applied to every protected field."""
+        if method not in type(self).permitted_at_methods:
+            msg = f"Indexed update {method!r} is not permitted for {type(self).__name__}."
+            raise TypeError(msg)
+
+        value = self._prepare_assignment_value(value, method=method)
         values = self.protected_values()
         candidate_values = self._coerce_assignment_value(value, validate_shape=method == "set")
         updates: dict[str, JaxProtectedValue] = {}
@@ -425,7 +463,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
 
     @property
     def at(self) -> JaxAxisProtectedIndexUpdateHelper[J]:
-        """Return the out-of-place indexed update helper, mirroring ``jax.Array.at``."""
+        """Return an indexed helper whose updates require ``permitted_at_methods`` permission."""
         return JaxAxisProtectedIndexUpdateHelper(self)
 
     @override

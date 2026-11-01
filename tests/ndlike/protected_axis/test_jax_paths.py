@@ -14,7 +14,7 @@ pytest.importorskip("jax")
 import jax
 from jax import numpy as jnp
 
-from ndlike.protected_axis.jax import JaxAxisProtected
+from ndlike.protected_axis.jax import JaxAtMethod, JaxAxisProtected
 from ndlike.protected_axis.jax_functions import (
     ProtectedValueSequenceInternals,
     _validate_batch_sync,
@@ -57,6 +57,16 @@ class _SingleArray(JaxAxisProtected[Any]):
     array: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
     permitted_functions: ClassVar[set[Any]] = {jax_mean, jax_sum, jax_average, jax_std, jax_var, jax_add, jax_subtract}
+    permitted_at_methods: ClassVar[set[JaxAtMethod]] = {
+        "set",
+        "add",
+        "subtract",
+        "multiply",
+        "divide",
+        "power",
+        "min",
+        "max",
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +115,7 @@ class _MixedArrayNumpy(JaxAxisProtected[Any]):
     array: jax.Array
     sidecar: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 1, "sidecar": 1}
+    permitted_at_methods: ClassVar[set[JaxAtMethod]] = {"set", "add"}
 
 
 @dataclass(frozen=True, slots=True)

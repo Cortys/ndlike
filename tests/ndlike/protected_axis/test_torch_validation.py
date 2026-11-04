@@ -72,14 +72,38 @@ def test_torch_subclass_rejects_non_int_axis_count() -> None:
             protected_axes: ClassVar[Any] = {"tensor": 1.5}
 
 
-def test_torch_subclass_rejects_unknown_field_reference() -> None:
-    """``protected_axes`` referring to an unknown attribute is rejected."""
-    with pytest.raises(TypeError, match="unknown field"):
+def test_torch_subclass_accepts_unannotated_protected_field() -> None:
+    """Protected fields may be provided by the instance without class annotations."""
 
-        @dataclass(frozen=True, slots=True)
-        class _Unknown(TorchAxisProtected[Any]):
-            tensor: torch.Tensor
-            protected_axes: ClassVar[dict[str, int]] = {"missing": 1}
+    class RuntimeField(TorchAxisProtected[torch.Tensor]):
+        protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
+
+        def __init__(self, tensor: torch.Tensor) -> None:
+            self.tensor = tensor
+
+    tensor = torch.ones((2, 3))
+    value = RuntimeField(tensor)
+    assert value.protected_values()["tensor"] is tensor
+    assert value.shape == (2,)
+
+
+@pytest.mark.parametrize("slots", [False, True])
+def test_torch_subclass_accepts_inherited_protected_field(slots: bool) -> None:
+    """Inherited dataclass fields support indexing without redeclaration."""
+
+    @dataclass(frozen=True, slots=slots)
+    class Parent(TorchAxisProtected[torch.Tensor]):
+        tensor: torch.Tensor
+        protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
+
+    @dataclass(frozen=True, slots=slots)
+    class Child(Parent):
+        pass
+
+    value = Child(torch.arange(6).reshape(2, 3))
+    indexed = value[0]
+    assert isinstance(indexed, Child)
+    torch.testing.assert_close(indexed.tensor, value.tensor[0])
 
 
 def test_torch_subclass_rejects_non_set_permitted_functions() -> None:

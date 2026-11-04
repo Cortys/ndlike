@@ -66,14 +66,38 @@ def test_subclass_rejects_negative_axis_count() -> None:
             protected_axes: ClassVar[dict[str, int]] = {"array": -1}
 
 
-def test_subclass_rejects_unknown_field_reference() -> None:
-    """``protected_axes`` referring to an unknown attribute is rejected."""
-    with pytest.raises(TypeError, match="unknown field"):
+def test_subclass_accepts_unannotated_protected_field() -> None:
+    """Protected fields may be provided by the instance without class annotations."""
 
-        @dataclass(frozen=True, slots=True)
-        class _Unknown(NumpyAxisProtected[np.ndarray]):
-            array: np.ndarray
-            protected_axes: ClassVar[dict[str, int]] = {"missing": 1}
+    class RuntimeField(NumpyAxisProtected[np.ndarray]):
+        protected_axes: ClassVar[dict[str, int]] = {"array": 1}
+
+        def __init__(self, array: np.ndarray) -> None:
+            self.array = array
+
+    array = np.ones((2, 3))
+    value = RuntimeField(array)
+    assert value.protected_values()["array"] is array
+    assert value.shape == (2,)
+
+
+@pytest.mark.parametrize("slots", [False, True])
+def test_subclass_accepts_inherited_protected_field(slots: bool) -> None:
+    """Inherited dataclass fields support indexing without redeclaration."""
+
+    @dataclass(frozen=True, slots=slots)
+    class Parent(NumpyAxisProtected[np.ndarray]):
+        array: np.ndarray
+        protected_axes: ClassVar[dict[str, int]] = {"array": 1}
+
+    @dataclass(frozen=True, slots=slots)
+    class Child(Parent):
+        pass
+
+    value = Child(np.arange(6).reshape(2, 3))
+    indexed = value[0]
+    assert isinstance(indexed, Child)
+    np.testing.assert_array_equal(indexed.array, value.array[0])
 
 
 def test_subclass_rejects_non_dict_permitted_ufuncs() -> None:

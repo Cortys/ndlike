@@ -882,15 +882,6 @@ def test_transpose_rejects_non_int_axes() -> None:
         jax_transpose(x, axes=("0", "1"))  # ty: ignore[invalid-argument-type]
 
 
-def test_subclassing_a_concrete_protected_class_is_rejected() -> None:
-    """``protected_axes`` is validated against the subclass' own annotations only."""
-    with pytest.raises(TypeError, match="unknown field"):
-
-        @dataclass(frozen=True, slots=True)
-        class _Sub(_SingleArray):
-            pass
-
-
 def test_jax_sharding() -> None:
     """Test sharding property."""
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))

@@ -152,9 +152,6 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
             if not isinstance(value, int) or value < 0:
                 msg = f"{cls.__name__}.protected_axes[{name}] must be a non-negative integer."
                 raise TypeError(msg)
-            if not hasattr(cls, "__annotations__") or name not in cls.__annotations__:
-                msg = f"{cls.__name__}.protected_axes refers to unknown field {name!r}."
-                raise TypeError(msg)
 
         broadcasted_batch = cls.broadcasted_batch
         if not isinstance(broadcasted_batch, set) or not broadcasted_batch <= axes.keys():

@@ -60,9 +60,6 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
             if not isinstance(value, int) or value < 0:
                 msg = f"{cls.__name__}.protected_axes[{name!r}] must be an int >= 0."
                 raise TypeError(msg)
-            if not hasattr(cls, "__annotations__") or name not in cls.__annotations__:
-                msg = f"{cls.__name__}.protected_axes refers to unknown field {name!r}."
-                raise TypeError(msg)
 
         cls.primary_protected_name = next(iter(axes))
 

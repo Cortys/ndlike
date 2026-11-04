@@ -20,6 +20,7 @@ from ndlike.jax_functions import (
 from ndlike.jax_like import JaxLike, JaxLikeImplementation
 from ndlike.protected_axis._common_functions import (
     batch_shape,
+    inherit_protected_axes,
     primary_protected_name,
     protected_shape,
     validate_batch_sync,
@@ -46,6 +47,21 @@ def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
     if ndim < protected_axes:
         msg = f"Protected field {name!r} has ndim {ndim}, expected >= {protected_axes}."
         raise ValueError(msg)
+
+
+def _inherit_protected_layout(cls: type[JaxAxisProtected]) -> None:
+    """Merge base layouts and local additions into independent class containers."""
+    axes = inherit_protected_axes(cls)
+    broadcasted_batch: set[str] = set()
+    declarations = [getattr(base, "broadcasted_batch", set()) for base in cls.__bases__]
+    declarations.append(vars(cls).get("broadcasted_batch", set()))
+    for declared_batch in declarations:
+        if not isinstance(declared_batch, set):
+            msg = f"{cls.__name__}.broadcasted_batch must be a set of protected field names."
+            raise TypeError(msg)
+        broadcasted_batch.update(declared_batch)
+    cls.protected_axes = axes
+    cls.broadcasted_batch = broadcasted_batch
 
 
 def _is_basic_index(index: ToIndices) -> bool:
@@ -137,30 +153,22 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](JaxLikeImplementatio
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
 
+        _inherit_protected_layout(cls)
         if cls is JaxAxisProtected or isabstract(cls):
             return
 
-        axes = getattr(cls, "protected_axes", None)
-        if not isinstance(axes, dict) or len(axes) == 0:
+        axes = cls.protected_axes
+        if not axes:
             msg = f"{cls.__name__} must define protected_axes as a non-empty dict[str, int]."
             raise TypeError(msg)
 
-        for name, value in axes.items():
-            if not isinstance(name, str) or len(name) == 0:
-                msg = f"{cls.__name__}.protected_axes must use non-empty string keys."
-                raise TypeError(msg)
-            if not isinstance(value, int) or value < 0:
-                msg = f"{cls.__name__}.protected_axes[{name}] must be a non-negative integer."
-                raise TypeError(msg)
-
         broadcasted_batch = cls.broadcasted_batch
-        if not isinstance(broadcasted_batch, set) or not broadcasted_batch <= axes.keys():
+        if not broadcasted_batch <= axes.keys():
             msg = f"{cls.__name__}.broadcasted_batch must be a set of protected field names."
             raise TypeError(msg)
         if not axes.keys() - broadcasted_batch:
             msg = f"{cls.__name__} must have at least one protected field outside broadcasted_batch."
             raise TypeError(msg)
-        cls.broadcasted_batch = set(broadcasted_batch)
         cls.primary_protected_name = primary_protected_name(axes, broadcasted_batch)
 
         permitted_functions = getattr(cls, "permitted_functions", set())

@@ -197,17 +197,17 @@ def test_layout_and_extraction(compact):
 def test_primary_name_is_precomputed_for_each_subclass(slots):
     @dataclass(frozen=True, slots=slots)
     class OtherShared(_Shared):
-        shared: Any
-        values: Any
+        other: Any
+        protected_axes: ClassVar[dict[str, int]] = {"other": 1}
         broadcasted_batch: ClassVar[set[str]] = {"values"}
 
-    assert OtherShared.primary_protected_name == "shared"
+    assert OtherShared.primary_protected_name == "other"
     assert _Shared.primary_protected_name == "values"
-    x = OtherShared(jnp.ones((2, 3, 4)), jnp.ones(4))
+    x = OtherShared(jnp.ones(4), jnp.ones(4), jnp.ones((2, 3, 4)))
     assert x.shape == (2, 3)
     internals = jax_axis_protected_internals(x)
     assert internals is not None
-    assert internals.primary_name == "shared"
+    assert internals.primary_name == "other"
 
 
 def test_runtime_operations_reuse_precomputed_primary_name(monkeypatch):

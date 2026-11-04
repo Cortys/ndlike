@@ -58,7 +58,7 @@ def test_subclass_rejects_empty_string_field_name() -> None:
 
 def test_subclass_rejects_negative_axis_count() -> None:
     """Negative axis counts are rejected."""
-    with pytest.raises(TypeError, match="must be an int >= 0"):
+    with pytest.raises(TypeError, match="must be a non-negative integer"):
 
         @dataclass(frozen=True, slots=True)
         class _Negative(NumpyAxisProtected[np.ndarray]):

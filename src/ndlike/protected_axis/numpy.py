@@ -19,6 +19,7 @@ from ndlike.array_like import (
 )
 from ndlike.protected_axis._common_functions import (
     batch_shape,
+    inherit_protected_axes,
     normalize_axes,
     normalize_axis,
     protected_shape,
@@ -54,21 +55,14 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
 
+        cls.protected_axes = inherit_protected_axes(cls)
         if cls is NumpyAxisProtected or isabstract(cls):
             return
 
-        axes = getattr(cls, "protected_axes", None)
-        if not isinstance(axes, dict) or len(axes) == 0:
+        axes = cls.protected_axes
+        if not axes:
             msg = f"{cls.__name__} must define protected_axes as a non-empty dict[str, int]."
             raise TypeError(msg)
-
-        for name, value in axes.items():
-            if not isinstance(name, str) or len(name) == 0:
-                msg = f"{cls.__name__}.protected_axes must use non-empty string keys."
-                raise TypeError(msg)
-            if not isinstance(value, int) or value < 0:
-                msg = f"{cls.__name__}.protected_axes[{name!r}] must be an int >= 0."
-                raise TypeError(msg)
 
         cls.primary_protected_name = next(iter(axes))
 

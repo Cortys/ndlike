@@ -104,6 +104,41 @@ The corresponding backend classes are `TorchAxisProtected` in
 `ndlike.protected_axis.torch` and `JaxAxisProtected` in
 `ndlike.protected_axis.jax`.
 
+For all three backends, `protected_axes` accumulates across base classes.
+Subclasses only need to declare additions. JAX's `broadcasted_batch` also
+accumulates; for example:
+
+```python
+import jax
+from ndlike.protected_axis.jax import JaxAxisProtected
+
+
+@dataclass(frozen=True)
+class Vectors(JaxAxisProtected[jax.Array]):
+    vectors: jax.Array
+    protected_axes: ClassVar[dict[str, int]] = {"vectors": 1}
+
+
+@dataclass(frozen=True)
+class WeightedVectors(Vectors):
+    weights: jax.Array
+    protected_axes: ClassVar[dict[str, int]] = {"weights": 0}
+    broadcasted_batch: ClassVar[set[str]] = {"weights"}
+```
+
+`WeightedVectors.protected_axes` is `{"vectors": 1, "weights": 0}`. Its weights
+may have a batch shape broadcastable to the vectors' batch shape. Further
+subclasses inherit both declarations, including through abstract bases. Layouts
+merge from left to right across bases, then append new subclass fields; this
+order also determines pytree children and the first non-broadcasted primary field.
+Each class gets its own dictionary and set.
+
+Inherited fields and broadcast markers cannot be removed by omitting them or
+declaring empty containers. Repeating an inherited axis count is allowed;
+changing it, or inheriting conflicting counts from multiple bases, raises
+`TypeError` when defining the class. This replaces the previous behavior where
+subclass declarations replaced the inherited layout.
+
 ### Preparing assignments
 
 NumPy and Torch protected types can override

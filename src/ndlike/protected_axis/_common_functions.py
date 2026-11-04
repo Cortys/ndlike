@@ -13,6 +13,34 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
 
+def inherit_protected_axes(cls: type) -> dict[str, int]:
+    """Merge base layouts and local additions into an independent dictionary."""
+    axes: dict[str, int] = {}
+    # Bases already include their ancestors, including abstract classes. Missing
+    # local declarations add nothing; redeclarations retain the base field order.
+    declarations = [getattr(base, "protected_axes", {}) for base in cls.__bases__]
+    declarations.append(vars(cls).get("protected_axes", {}))
+    for declared_axes in declarations:
+        if not isinstance(declared_axes, dict):
+            msg = f"{cls.__name__} must define protected_axes as a non-empty dict[str, int]."
+            raise TypeError(msg)
+        for name, value in declared_axes.items():
+            if not isinstance(name, str) or len(name) == 0:
+                msg = f"{cls.__name__}.protected_axes must use non-empty string keys."
+                raise TypeError(msg)
+            if not isinstance(value, int) or value < 0:
+                msg = f"{cls.__name__}.protected_axes[{name}] must be a non-negative integer."
+                raise TypeError(msg)
+            if name in axes and axes[name] != value:
+                msg = (
+                    f"{cls.__name__}.protected_axes[{name!r}] conflicts with an inherited "
+                    f"axis count: {axes[name]} != {value}."
+                )
+                raise TypeError(msg)
+            axes[name] = value
+    return axes
+
+
 class AxisProtectedCreator[V, R](Protocol):
     """Rebuild a representation from values in the same backend family."""
 

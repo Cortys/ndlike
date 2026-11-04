@@ -180,17 +180,17 @@ def test_primary_name_is_a_precomputed_class_attribute(backend: str, slots: bool
 
     monkeypatch.setattr("ndlike.protected_axis._common_functions.primary_protected_name", unexpected_selection)
     assert Pair.primary_protected_name == "first"
-    assert ReorderedPair.primary_protected_name == "second"
+    assert ReorderedPair.primary_protected_name == "first"
     first, second = _Value((2, 3)), _Value((2, 3))
     obj = ReorderedPair(first, second)
-    assert obj.primary_protected_name == "second"
+    assert obj.primary_protected_name == "first"
     assert obj.shape == (2, 3)
     internals = extract_axis_protected_internals(obj)
     assert internals is not None
-    assert internals.primary_name == "second"
-    assert internals.primary_value is second
+    assert internals.primary_name == "first"
+    assert internals.primary_value is first
     rebuilt = apply_unary(internals, lambda _name, value, _axes: value)
-    assert rebuilt.primary_protected_name == "second"
+    assert rebuilt.primary_protected_name == "first"
 
 
 def test_batch_validation_requires_primary_name() -> None:

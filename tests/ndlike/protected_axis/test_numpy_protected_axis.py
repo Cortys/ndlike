@@ -143,6 +143,44 @@ def test_shape_functions_apply_to_all_fields() -> None:
     assert reshaped.second.shape == (3, 2)
 
 
+@pytest.mark.parametrize(
+    ("axes", "shape"),
+    [
+        ((), (2, 3)),
+        ((0, 1), (1, 1, 2, 3)),
+        ((0, 2), (1, 2, 1, 3)),
+        ((0, 3), (1, 2, 3, 1)),
+        ((1, 3), (2, 1, 3, 1)),
+        ((2, 3), (2, 3, 1, 1)),
+        ((3, 1), (2, 1, 3, 1)),
+        ((0, -1), (1, 2, 3, 1)),
+        ((-4, -1), (1, 2, 3, 1)),
+    ],
+)
+def test_expand_dims_uses_positions_in_the_output_batch_shape(axes, shape) -> None:
+    x = SingleArray(np.arange(24.0).reshape(2, 3, 4))
+    result = np.expand_dims(x, axis=axes)
+    assert isinstance(result, SingleArray)
+    assert result.shape == shape
+    assert result.protected_shape == (4,)
+    np.testing.assert_array_equal(result.array, x.array.reshape((*shape, 4)))
+
+
+@pytest.mark.parametrize("axes", [(0, 4), (0, -5), (0, 0), (0, -4)])
+def test_expand_dims_rejects_out_of_range_and_repeated_batch_axes(axes) -> None:
+    x = SingleArray(np.zeros((2, 3, 4)))
+    with pytest.raises(ValueError, match=r"out of bounds|repeated axis"):
+        np.expand_dims(x, axis=axes)
+
+
+def test_expand_dims_inserts_multiple_axes_into_a_scalar_batch() -> None:
+    x = SingleArray(np.arange(4.0))
+    result = np.expand_dims(x, axis=(0, 1))
+    assert isinstance(result, SingleArray)
+    assert result.shape == (1, 1)
+    np.testing.assert_array_equal(result.array, x.array[None, None, :])
+
+
 def test_getitem_and_setitem_for_instance_and_tuple() -> None:
     x = PairArray(np.zeros((2, 2)), np.ones((2, 2)))
 

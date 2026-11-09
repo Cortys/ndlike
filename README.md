@@ -92,7 +92,7 @@ assert stacked.shape == (2, 6)
 `protected_axes` maps field names to the number of trailing axes to preserve.
 Multiple fields can have different internal shapes while sharing the same batch
 shape; indexing and supported shape operations update them together. Dataclasses
-work out of the box; other classes can override `with_protected_values` to
+work out of the box; other classes must override `with_protected_values` to
 reconstruct results.
 
 Numerical operations are opt-in: use `permitted_functions` (for example,
@@ -129,15 +129,42 @@ class WeightedVectors(Vectors):
 `WeightedVectors.protected_axes` is `{"vectors": 1, "weights": 0}`. Its weights
 may have a batch shape broadcastable to the vectors' batch shape. Further
 subclasses inherit both declarations, including through abstract bases. Layouts
-merge from left to right across bases, then append new subclass fields; this
-order also determines pytree children and the first non-broadcasted primary field.
-Each class gets its own dictionary and set.
+merge from left to right across bases.
 
 Inherited fields and broadcast markers cannot be removed by omitting them or
 declaring empty containers. Repeating an inherited axis count is allowed;
 changing it, or inheriting conflicting counts from multiple bases, raises
 `TypeError` when defining the class. This replaces the previous behavior where
 subclass declarations replaced the inherited layout.
+
+### Fields owned by initialization
+
+A dataclass subclass can redeclare an inherited protected field with
+`field(init=False)`. The field remains in `protected_axes`, but
+`protected_values()` and operations in NumPy, Torch, and ndlike's JAX wrappers
+use only the effective layout, excluding these fields. They transform only independent fields;
+`with_protected_values` receives those results and normal dataclass initialization
+recreates the excluded fields through defaults, factories, or `__post_init__`.
+Consequently, `x.with_protected_values(x.protected_values())` reconstructs a copy
+without passing any `init=False` fields to the constructor. Excluded fields remain
+accessible as attributes and through `protected_value()` when selected as primary.
+For example, a specialized weighted representation can fix its weights:
+
+```python
+from dataclasses import field
+import jax.numpy as jnp
+
+
+@dataclass(frozen=True)
+class UniformVectors(WeightedVectors):
+    weights: jax.Array = field(init=False, default_factory=lambda: jnp.array(1.0))
+```
+
+The private `_effective_protected_axes` dictionary is resolved on first use from
+the concrete class's completed dataclass fields and cached on that class. This
+also handles frozen/slotted subclasses and overrides that restore `init=True`.
+Non-dataclasses retain every declared protected field. Treat class layouts and
+dataclass field definitions as fixed after first use.
 
 ### Preparing assignments
 

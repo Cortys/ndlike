@@ -22,9 +22,9 @@ import pytest
 pytest.importorskip("torch")
 import torch
 
+from ndlike.protected_axis._common import validate_batch_sync as _validate_batch_sync
 from ndlike.protected_axis.numpy import NumpyAxisProtected
 from ndlike.protected_axis.numpy_functions import (
-    _validate_batch_sync,
     numpy_axis_protected_internals,
 )
 from ndlike.protected_axis.torch import TorchAxisProtected
@@ -157,7 +157,7 @@ def test_validate_batch_sync_raises_when_ndim_drops() -> None:
     protected_axes = {"a": 1, "b": 1}
 
     with pytest.raises(ValueError, match="removed protected trailing axes"):
-        _validate_batch_sync(values, protected_axes, "a")
+        _validate_batch_sync(values, protected_axes)
 
 
 def test_validate_batch_sync_raises_when_batch_shapes_disagree() -> None:
@@ -166,7 +166,7 @@ def test_validate_batch_sync_raises_when_batch_shapes_disagree() -> None:
     protected_axes = {"a": 1, "b": 1}
 
     with pytest.raises(ValueError, match="inconsistent batch-shapes"):
-        _validate_batch_sync(values, protected_axes, "a")
+        _validate_batch_sync(values, protected_axes)
 
 
 # ---------------------------------------------------------------------------
@@ -369,61 +369,6 @@ def test_ufunc_reduce_with_raw_tuple_out() -> None:
     result = np.add.reduce(x, axis=0, out=(raw_out,))  # ty:ignore[no-matching-overload]
     np.testing.assert_array_equal(raw_out, np.add.reduce(x.array, axis=0))
     assert result is raw_out or result == raw_out
-
-
-# ---------------------------------------------------------------------------
-# numpy_axis_protected_internals returns None for malformed protected shapes.
-# ---------------------------------------------------------------------------
-
-
-class _FakeProtected:
-    """A duck-typed value that pretends to have malformed protected_axes."""
-
-    primary_protected_name: ClassVar[str] = "main"
-
-    def __init__(self, protected_axes: dict[str, int]) -> None:
-        self.protected_axes = protected_axes
-        self.permitted_functions: set[Any] = set()
-
-    def protected_values(self, func: Any = None) -> dict[str, np.ndarray] | None:  # noqa: ANN401
-        del func
-        return {"missing_field": np.zeros((2, 3))}
-
-    def with_protected_values(self, values: Any, func: Any = None) -> Any:  # noqa: ANN401
-        del values, func
-        return self
-
-
-def test_internals_returns_none_when_field_missing_in_values() -> None:
-    """Returns None when protected_values omits a declared field."""
-    fake = _FakeProtected({"main": 1})
-    assert numpy_axis_protected_internals(fake, None) is None
-
-
-def test_internals_returns_none_when_value_ndim_too_small() -> None:
-    """Returns None when a protected field has fewer dims than required."""
-
-    class _BadNdim:
-        protected_axes: ClassVar[dict[str, int]] = {"a": 2}
-        primary_protected_name: ClassVar[str] = "a"
-        permitted_functions: ClassVar[set[Any]] = set()
-
-        def protected_values(self, func: Any = None) -> dict[str, np.ndarray] | None:  # noqa: ANN401
-            del func
-            return {"a": np.zeros((3,))}  # ndim=1, need >= 2.
-
-        def with_protected_values(self, values: Any, func: Any = None) -> Any:  # noqa: ANN401
-            del values, func
-            return self
-
-    fake = _BadNdim()
-    assert numpy_axis_protected_internals(fake, None) is None
-
-
-def test_internals_returns_none_for_empty_protected_axes() -> None:
-    """Returns None when ``protected_axes`` is empty."""
-    fake = _FakeProtected({})
-    assert numpy_axis_protected_internals(fake, None) is None
 
 
 # ---------------------------------------------------------------------------

@@ -14,10 +14,10 @@ pytest.importorskip("jax")
 import jax
 from jax import numpy as jnp
 
+from ndlike.protected_axis._common import validate_batch_sync as _validate_batch_sync
 from ndlike.protected_axis.jax import JaxAtMethod, JaxAxisProtected
 from ndlike.protected_axis.jax_functions import (
     ProtectedValueSequenceInternals,
-    _validate_batch_sync,
     jax_axis_protected_internals,
     protected_batch_reduction_function,
     protected_concatenate_function,
@@ -30,6 +30,7 @@ from ndlike.jax_functions import (
     jax_add,
     jax_astype,
     jax_average,
+    jax_broadcast_to,
     jax_concatenate,
     jax_conj,
     jax_copy,
@@ -756,20 +757,22 @@ def test_with_protected_values_can_repair_desynced_batch_shapes() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_protected_values_rejects_desynced_batch_shapes() -> None:
-    """Protected fields must agree on their batch shape."""
+def test_protected_values_reads_fields_without_validation() -> None:
+    """Reading fields does not validate their batch shapes."""
     x = _PairArrayProtected(jnp.ones((2, 4)), jnp.ones((3, 4)))
 
-    with pytest.raises(ValueError, match="inconsistent batch-shapes"):
-        _ = x.protected_values()
+    assert x.protected_values() == {"left": x.left, "right": x.right}
+    assert x.shape == (2,)
 
 
-def test_concatenate_rejects_axis_none() -> None:
-    """``axis=None`` would flatten the protected trailing axes into the batch."""
+def test_concatenate_axis_none_flattens_only_batch_axes() -> None:
+    """``axis=None`` keeps the protected trailing axes intact."""
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
-    with pytest.raises(ValueError, match="modified protected trailing axes"):
-        _ = jax_concatenate((x, x), axis=None)
+    result = jax_concatenate((x, x), axis=None)
+    assert isinstance(result, _SingleArray)
+    assert result.shape == (12,)
+    np.testing.assert_array_equal(result.array, jnp.concatenate((x.array.reshape(6, 4),) * 2))
 
 
 def test_concatenate_rejects_non_int_axis() -> None:
@@ -958,83 +961,16 @@ _concatenate_impl = _unwrap(protected_concatenate_function, 1)
 _stack_impl = _unwrap(protected_stack_function, 1)
 
 
-class _FakeEmptyProtectedAxes:
-    """Duck-typed stand-in with an empty ``protected_axes``, which real subclasses cannot have."""
-
-    protected_axes: ClassVar[dict[str, int]] = {}
-    primary_protected_name: ClassVar[str] = "array"
-    permitted_functions: ClassVar[set[Any]] = set()
-
-    def protected_values(self, func: Callable | None = None) -> dict[str, Any]:
-        del func
-        return {}
-
-    def with_protected_values(self, values: dict[str, Any], func: Callable | None = None) -> Any:  # noqa: ANN401
-        del values, func
-        return self
-
-
-class _FakeMissingField:
-    """Duck-typed stand-in whose ``protected_values()`` omits a field it declares."""
-
-    protected_axes: ClassVar[dict[str, int]] = {"array": 1}
-    primary_protected_name: ClassVar[str] = "array"
-    permitted_functions: ClassVar[set[Any]] = set()
-
-    def protected_values(self, func: Callable | None = None) -> dict[str, Any]:
-        del func
-        return {}
-
-    def with_protected_values(self, values: dict[str, Any], func: Callable | None = None) -> Any:  # noqa: ANN401
-        del values, func
-        return self
-
-
-class _FakeInsufficientNdim:
-    """Duck-typed stand-in whose field ndim is below its declared protected-axis count.
-
-    Real ``JaxAxisProtected`` subclasses cannot reach this state: ``protected_values()``
-    validates field ndim eagerly and raises before returning.
-    """
-
-    protected_axes: ClassVar[dict[str, int]] = {"array": 2}
-    primary_protected_name: ClassVar[str] = "array"
-    permitted_functions: ClassVar[set[Any]] = set()
-
-    def protected_values(self, func: Callable | None = None) -> dict[str, Any]:
-        del func
-        return {"array": jnp.array(5.0)}
-
-    def with_protected_values(self, values: dict[str, Any], func: Callable | None = None) -> Any:  # noqa: ANN401
-        del values, func
-        return self
-
-
-def test_jax_axis_protected_internals_rejects_empty_protected_axes() -> None:
-    """A duck-typed object with no declared protected axes is not extractable."""
-    assert jax_axis_protected_internals(_FakeEmptyProtectedAxes()) is None
-
-
-def test_jax_axis_protected_internals_rejects_missing_field() -> None:
-    """A duck-typed object whose ``protected_values()`` omits a declared field is rejected."""
-    assert jax_axis_protected_internals(_FakeMissingField()) is None
-
-
-def test_jax_axis_protected_internals_rejects_insufficient_ndim() -> None:
-    """A duck-typed object whose field ndim undercuts its declared protected axes is rejected."""
-    assert jax_axis_protected_internals(_FakeInsufficientNdim()) is None
-
-
 def test_validate_batch_sync_rejects_result_that_lost_protected_axes() -> None:
     """A result field with fewer dims than its protected-axis count is rejected."""
     with pytest.raises(ValueError, match="removed protected trailing axes"):
-        _validate_batch_sync({"array": jnp.array(5.0)}, {"array": 1}, "array")
+        _validate_batch_sync({"array": jnp.array(5.0)}, {"array": 1})
 
 
 def test_validate_batch_sync_rejects_mismatched_batch_shapes() -> None:
     """Result fields that disagree on batch shape are rejected."""
     with pytest.raises(ValueError, match="inconsistent batch-shapes"):
-        _validate_batch_sync({"left": jnp.ones((2, 3)), "right": jnp.ones((3, 3))}, {"left": 1, "right": 1}, "left")
+        _validate_batch_sync({"left": jnp.ones((2, 3)), "right": jnp.ones((3, 3))}, {"left": 1, "right": 1})
 
 
 def test_reduction_promotes_bare_scalar_result_to_array() -> None:
@@ -1141,3 +1077,37 @@ def test_stack_rejects_sequence_with_template_but_no_protected_values(monkeypatc
 
     with pytest.raises(TypeError, match="stack with protected out requires at least one protected input"):
         _stack_impl(jax_stack, params)
+
+
+def test_plain_classes_require_custom_reconstruction():
+    class Plain(JaxAxisProtected[Any]):
+        protected_axes: ClassVar[dict[str, int]] = {"array": 1}
+        broadcasted_batch: ClassVar[set[str]] = {"array"}
+
+        def __init__(self, array) -> None:
+            self.array = array
+            self.metadata = "keep"
+
+        @classmethod
+        def _pytree_field_names(cls) -> tuple[str, ...]:
+            return ("array", "metadata")
+
+    x = Plain(jnp.arange(4.0))
+    assert x.shape == ()
+    with pytest.raises(TypeError, match="dataclass"):
+        x.with_protected_values({"array": jnp.ones(4)})
+
+    class Rebuildable(Plain):
+        def with_protected_values(self, values, func=None):
+            del func
+            return type(self)(values.get("array", self.array))
+
+    x = Rebuildable(x.array)
+    y = jax_broadcast_to(x, (2, 3))
+    assert isinstance(y, Rebuildable)
+    assert y.shape == (2, 3)
+    assert y.array.shape == (2, 3, 4)
+    assert y.metadata == "keep"
+    assert x.shape == ()
+    np.testing.assert_array_equal(np.asarray(y), jnp.broadcast_to(x.array, (2, 3, 4)))
+    assert jax.jit(lambda x: x)(y).shape == (2, 3)

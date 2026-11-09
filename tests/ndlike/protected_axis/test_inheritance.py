@@ -84,7 +84,7 @@ def test_conflicting_subclass_counts_are_rejected(backend, count):
         type("Child", (Parent,), {"protected_axes": {"values": count}})
 
 
-def test_matching_redeclarations_preserve_base_order(backend):
+def test_matching_redeclarations_follow_local_order(backend):
     base, _ = backend
 
     class Parent(base):
@@ -93,7 +93,8 @@ def test_matching_redeclarations_preserve_base_order(backend):
     class Child(Parent):
         protected_axes: ClassVar[dict[str, int]] = {"new": 2, "labels": 0, "values": 1}
 
-    assert list(Child.protected_axes.items()) == [("values", 1), ("labels", 0), ("new", 2)]
+    assert list(Child.protected_axes.items()) == [("new", 2), ("labels", 0), ("values", 1)]
+    assert Child.primary_protected_name == "new"
 
 
 def test_abstract_diamond_inheritance_merges_all_layouts(backend):
@@ -145,3 +146,73 @@ def test_invalid_local_declarations_are_rejected_with_valid_bases(backend, axes)
 
     with pytest.raises(TypeError, match="protected_axes"):
         type("Child", (Parent,), {"protected_axes": axes})
+
+
+@pytest.mark.parametrize("slots", [False, True])
+def test_layout_order_selects_primary_independently_of_constructor_order(backend, slots):
+    base, arrays = backend
+
+    @dataclass(frozen=True, slots=slots)
+    class Parent(base):
+        values: Any
+        labels: Any
+        protected_axes: ClassVar[dict[str, int]] = {"labels": 0, "values": 1}
+
+    @dataclass(frozen=True, slots=slots)
+    class Child(Parent):
+        pass
+
+    @dataclass(frozen=True, slots=slots)
+    class Reordered(Child):
+        protected_axes: ClassVar[dict[str, int]] = {"values": 1, "labels": 0}
+
+    values, labels = arrays.ones((2, 3)), arrays.arange(2)
+    for cls in (Parent, Child):
+        x = cls(values, labels)
+        assert x.values is values
+        assert x.labels is labels
+        assert cls.primary_protected_name == "labels"
+        assert x.protected_value() is labels
+        assert x.protected_shape == ()
+        assert x.shape == (2,)
+        assert x.reshape(1, 2).primary_protected_name == "labels"
+        assert x[0].protected_shape == ()
+
+    x = Reordered(values, labels)
+    assert x.values is values
+    assert x.labels is labels
+    assert x.protected_value() is values
+    assert x.protected_shape == (3,)
+    assert Parent.primary_protected_name == Child.primary_protected_name == "labels"
+    assert list(Parent.protected_axes) == ["labels", "values"]
+    assert list(Reordered._effective_protected_axes) == ["values", "labels"]  # noqa: SLF001
+    if hasattr(Reordered, "pytree_children"):
+        assert Reordered.pytree_children == ("values", "labels")
+
+
+def test_partial_redeclarations_preserve_omitted_fields(backend):
+    base, _ = backend
+
+    class Parent(base):
+        protected_axes: ClassVar[dict[str, int]] = {"values": 1, "labels": 0, "weights": 0}
+
+    class Child(Parent):
+        protected_axes: ClassVar[dict[str, int]] = {"weights": 0, "labels": 0}
+
+    assert list(Child.protected_axes) == ["values", "weights", "labels"]
+    assert list(Parent.protected_axes) == ["values", "labels", "weights"]
+
+
+def test_primary_is_derived_from_layout_even_if_a_class_attribute_is_supplied(backend):
+    base, _ = backend
+
+    class Parent(base):
+        protected_axes: ClassVar[dict[str, int]] = {"values": 1, "labels": 0}
+        primary_protected_name: ClassVar[str] = "labels"
+
+    class Child(Parent):
+        protected_axes: ClassVar[dict[str, int]] = {"labels": 0, "values": 1}
+        primary_protected_name: ClassVar[str] = "values"
+
+    assert Parent.primary_protected_name == "values"
+    assert Child.primary_protected_name == "labels"

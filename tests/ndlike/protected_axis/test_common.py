@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
-from inspect import Parameter, signature
 from pathlib import Path
 import shutil
 import subprocess
@@ -14,8 +13,9 @@ from typing import Any, ClassVar, overload
 
 import pytest
 
-from ndlike.protected_axis._common_functions import (
+from ndlike.protected_axis._common import (
     AxisProtectedInternals,
+    _AxisProtectedBase,
     apply_unary,
     extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
@@ -47,15 +47,21 @@ class _Rebuilt:
 
 
 @dataclass
-class _Protected:
+class _Protected(_AxisProtectedBase[_Value, _Rebuilt]):
     values: dict[str, _Value]
     primary_protected_name: ClassVar[str] = "left"
-    protected_axes: dict[str, int] = field(default_factory=lambda: {"left": 1, "right": 0})
-    permitted_functions: set[Callable[..., Any]] = field(default_factory=lambda: {_allowed})
+    protected_axes: ClassVar[dict[str, int]] = {"left": 1, "right": 0}
+    permitted_functions: ClassVar[set[Callable[..., Any]]] = {_allowed}
     read_contexts: list[Callable | None] = field(default_factory=list)
 
+    def _protected_batch_shape(self, values: Mapping[str, _Value] | None = None) -> tuple[int, ...]:
+        del values
+        shape = self.values[self.primary_protected_name].shape
+        axes = self.protected_axes[self.primary_protected_name]
+        return shape[:-axes] if axes else shape
+
     @overload
-    def protected_values(self) -> dict[str, _Value]: ...
+    def protected_values(self, func: None = None) -> dict[str, _Value]: ...
 
     @overload
     def protected_values(self, func: Callable) -> dict[str, _Value] | None: ...
@@ -81,7 +87,7 @@ def test_extraction_preserves_types_context_and_owner(check_is_permitted: bool) 
     obj = _Protected({"left": _Value((2, 3)), "right": _Value((2,))})
     internals = extract_axis_protected_internals(obj, _allowed, check_is_permitted=check_is_permitted)
     assert internals is not None
-    assert internals.primary_value is obj.values["left"]
+    assert internals.values["left"] is obj.values["left"]
     assert internals.batch_ndim == 1
     assert internals.owner_type is _Protected
     assert internals.values == obj.values
@@ -109,22 +115,35 @@ def test_permission_checks_are_optional_but_reconstruction_keeps_context() -> No
     assert obj.read_contexts[-1] is None
 
 
-@pytest.mark.parametrize("protected_axes", [{}, {"missing": 1}, {"left": 3}])
-def test_extraction_rejects_invalid_layout(protected_axes: dict[str, int]) -> None:
-    obj = _Protected({"left": _Value((2, 3))}, protected_axes=protected_axes)
-    assert extract_axis_protected_internals(obj) is None
+def test_extraction_uses_the_batch_shape_hook() -> None:
+    class ExplicitShape(_Protected):
+        def _protected_batch_shape(self, values: Mapping[str, _Value] | None = None) -> tuple[int, ...]:
+            del values
+            return (5, 2)
+
+    obj = ExplicitShape({"left": _Value((2, 3)), "right": _Value((2,))})
+    internals = extract_axis_protected_internals(obj)
+    assert internals is not None
+    assert internals.batch_shape == (5, 2)
+    assert internals.batch_ndim == 2
 
 
-@pytest.mark.parametrize(
-    ("replacement", "message"),
-    [(_Value(()), "removed protected trailing axes"), (_Value((4, 3)), "inconsistent batch-shapes")],
-)
-def test_unary_validates_fields_before_reconstruction(replacement: _Value, message: str) -> None:
+def test_extraction_rejects_empty_declaration() -> None:
+    class Empty(_AxisProtectedBase[_Value, _Rebuilt]):
+        protected_axes: ClassVar[dict[str, int]] = {}
+
+        def with_protected_values(self, values: dict[str, _Value], func: Callable | None = None) -> _Rebuilt:
+            return _Rebuilt(values, func)
+
+    assert extract_axis_protected_internals(Empty()) is None
+
+
+def test_unary_rebuilds_transformed_fields() -> None:
     obj = _Protected({"left": _Value((2, 3)), "right": _Value((2,))})
     internals = extract_axis_protected_internals(obj)
     assert internals is not None
-    with pytest.raises(ValueError, match=message):
-        apply_unary(internals, lambda name, value, _axes: replacement if name == "left" else value)
+    result = apply_unary(internals, lambda _name, value, _axes: _Value((5, *value.shape)))
+    assert result.values == {"left": _Value((5, 2, 3)), "right": _Value((5, 2))}
 
 
 def test_sequence_retains_typed_template_and_mixed_operand_order() -> None:
@@ -136,7 +155,7 @@ def test_sequence_retains_typed_template_and_mixed_operand_order() -> None:
     )
     assert sequence.has_protected
     assert sequence.template is not None
-    assert sequence.template.primary_value is first.values["left"]
+    assert sequence.template.values["left"] is first.values["left"]
     for name in first.protected_axes:
         assert sequence.values_by_field[name] == [first.values[name], middle, second.values[name], trailing]
     assert sequence.template.create(first.values).func is _allowed
@@ -150,8 +169,11 @@ def test_sequence_without_protected_values_has_no_template() -> None:
 
 
 def test_sequence_rejects_mismatched_layouts() -> None:
-    first = _Protected({"left": _Value((2, 3))}, protected_axes={"left": 1})
-    second = _Protected({"left": _Value((2, 3))}, protected_axes={"left": 0})
+    class Other(_Protected):
+        protected_axes: ClassVar[dict[str, int]] = {"other": 0}
+
+    first = _Protected({"left": _Value((2, 3)), "right": _Value((2,))})
+    second = Other({**first.values, "other": _Value((2,))})
     with pytest.raises(ValueError, match="identical protected_axes"):
         extract_protected_value_sequence_internals((first, second), extract=_extract)
 
@@ -178,25 +200,29 @@ def test_primary_name_is_a_precomputed_class_attribute(backend: str, slots: bool
     def unexpected_selection(*_args: object, **_kwargs: object) -> None:
         pytest.fail("Primary-field selection must only run when defining the class.")
 
-    monkeypatch.setattr("ndlike.protected_axis._common_functions.primary_protected_name", unexpected_selection)
+    monkeypatch.setattr("ndlike.protected_axis._common.primary_protected_name", unexpected_selection)
     assert Pair.primary_protected_name == "first"
-    assert ReorderedPair.primary_protected_name == "first"
+    assert ReorderedPair.primary_protected_name == "second"
     first, second = _Value((2, 3)), _Value((2, 3))
     obj = ReorderedPair(first, second)
-    assert obj.primary_protected_name == "first"
+    assert obj.primary_protected_name == "second"
     assert obj.shape == (2, 3)
     internals = extract_axis_protected_internals(obj)
     assert internals is not None
-    assert internals.primary_name == "first"
-    assert internals.primary_value is first
+    assert internals.values["first"] is first
     rebuilt = apply_unary(internals, lambda _name, value, _axes: value)
-    assert rebuilt.primary_protected_name == "first"
+    assert rebuilt.primary_protected_name == "second"
 
 
-def test_batch_validation_requires_primary_name() -> None:
-    parameter = signature(validate_batch_sync).parameters["primary_name"]
-    assert parameter.default is Parameter.empty
-    assert parameter.kind is Parameter.POSITIONAL_OR_KEYWORD
+def test_batch_validation_accepts_empty_layout() -> None:
+    assert validate_batch_sync({}, {}) == ()
+
+
+def test_batch_validation_uses_unmarked_witness_or_broadcasts() -> None:
+    values = {"shared": _Value((1, 3)), "values": _Value((2, 3))}
+    axes = {"shared": 1, "values": 1}
+    assert validate_batch_sync(values, axes, frozenset({"shared"})) == (2,)
+    assert validate_batch_sync(values, axes, frozenset(axes)) == (2,)
 
 
 def test_generic_type_contracts(tmp_path: Path) -> None:
@@ -216,7 +242,7 @@ def test_generic_type_contracts(tmp_path: Path) -> None:
     probe = tmp_path / "contracts.py"
     probe.write_text(
         """from typing import assert_type
-from ndlike.protected_axis._common_functions import (
+from ndlike.protected_axis._common import (
     AxisProtectedInternals, ProtectedValueSequenceInternals,
     apply_unary, extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
@@ -227,7 +253,7 @@ def check(obj: _Protected) -> None:
     internals = extract_axis_protected_internals(obj)
     assert_type(internals, AxisProtectedInternals[_Value, _Rebuilt] | None)
     assert internals is not None
-    assert_type(internals.primary_value, _Value)
+    assert_type(internals.values["left"], _Value)
     assert_type(apply_unary(internals, lambda _name, value, _axes: value), _Rebuilt)
     sequence = extract_protected_value_sequence_internals((obj,), extract=_extract)
     assert_type(sequence, ProtectedValueSequenceInternals[_Value, _Rebuilt])

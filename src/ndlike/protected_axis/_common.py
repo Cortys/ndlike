@@ -1,11 +1,13 @@
-"""Shared helpers for protected-axis function dispatch implementations."""
+"""Shared base class and helpers for protected-axis implementations."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from abc import ABCMeta, abstractmethod
+from dataclasses import dataclass, fields, is_dataclass
 from functools import wraps
 from inspect import BoundArguments, signature
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast, overload, runtime_checkable
+import math
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast, overload
 
 import numpy as np
 
@@ -13,13 +15,109 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
 
+class EffectiveProtectedAxes:
+    """Resolve constructor-owned fields once, after dataclass decoration.
+
+    Each subclass gets its own descriptor. Resolution replaces it on that
+    concrete class, so subclasses never reuse a parent's resolved layout.
+    """
+
+    def __get__(self, instance: object, owner: type) -> dict[str, int]:
+        del instance
+        cls = cast("Any", owner)
+        excluded = {field.name for field in fields(cls) if not field.init} if is_dataclass(cls) else set()
+        axes = {name: count for name, count in cls.protected_axes.items() if name not in excluded}
+        cls._effective_protected_axes = axes
+        return axes
+
+
+class _AxisProtectedBase[V, R](metaclass=ABCMeta):
+    """Read effective fields and logical shapes without validating representations.
+
+    Instances and custom readers must supply fields with sufficient protected
+    rank and compatible batch shapes. Only all-broadcast layouts need to inspect
+    every field's shape to determine the logical shape.
+    """
+
+    protected_axes: ClassVar[dict[str, int]]
+    permitted_functions: ClassVar[set[Callable[..., Any]]]
+    _effective_protected_axes: ClassVar[EffectiveProtectedAxes] = EffectiveProtectedAxes()
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        cls.protected_axes = inherit_protected_axes(cls)
+        # Each subclass resolves its own layout after decorators have completed.
+        cls._effective_protected_axes = EffectiveProtectedAxes()
+
+    @abstractmethod
+    def with_protected_values(self, values: dict[str, V], func: Callable | None) -> R:
+        """Reconstruct a value in the backend's representation family."""
+        ...
+
+    def validate(self) -> None:
+        """Raise if effective fields have insufficient rank or incompatible batches.
+
+        Call explicitly, or from __post_init__ to check dataclass construction.
+        Fields owned by initialization (init=False) are excluded.
+        """
+        axes = self._effective_protected_axes
+        values = self.protected_values()
+        if values.keys() != axes.keys():
+            msg = "Protected values must contain exactly the effective protected fields."
+            raise ValueError(msg)
+        validate_batch_sync(values, axes, getattr(type(self), "broadcasted_batch", frozenset()))
+
+    def _postprocess_protected_values(self, values: dict[str, V], func: Callable) -> dict[str, V]:
+        """Optionally transform the values exposed to a particular function."""
+        del func
+        return values
+
+    @overload
+    def protected_values(self, func: None = None) -> dict[str, V]: ...
+
+    @overload
+    def protected_values(self, func: Callable) -> dict[str, V] | None: ...
+
+    def protected_values(self, func: Callable | None = None) -> dict[str, V] | None:
+        """Read effective values as-is, optionally checking function permissions."""
+        if func is not None and func not in type(self).permitted_functions:
+            return None
+        values = {name: getattr(self, name) for name in self._effective_protected_axes}
+        return values if func is None else self._postprocess_protected_values(values, func)
+
+    def _protected_batch_shape(self, values: Mapping[str, V] | None = None) -> tuple[int, ...]:
+        """Read one shape, reusing supplied values when all fields broadcast."""
+        axes = self._effective_protected_axes
+        broadcasted = getattr(type(self), "broadcasted_batch", ())
+        for name, count in axes.items():
+            if name not in broadcasted:
+                return batch_shape(value_shape(getattr(self, name)), count)
+        if not axes:
+            return ()
+        if values is None:
+            values = self.protected_values()
+        return np.broadcast_shapes(*(batch_shape(value_shape(values[name]), count) for name, count in axes.items()))
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """Read the logical shape without collecting fields unless all broadcast."""
+        return self._protected_batch_shape()
+
+
+def require_effective_fields(axes: Mapping[str, int]) -> None:
+    """Reject batch operations with no independent fields to carry their result."""
+    if not axes:
+        msg = "Batch operations require at least one effective protected field."
+        raise ValueError(msg)
+
+
 def inherit_protected_axes(cls: type) -> dict[str, int]:
-    """Merge base layouts and local additions into an independent dictionary."""
+    """Merge base layouts, then place local declarations in their declared order."""
     axes: dict[str, int] = {}
-    # Bases already include their ancestors, including abstract classes. Missing
-    # local declarations add nothing; redeclarations retain the base field order.
+    # Bases already include their ancestors, including abstract classes.
+    local_axes = vars(cls).get("protected_axes", {})
     declarations = [getattr(base, "protected_axes", {}) for base in cls.__bases__]
-    declarations.append(vars(cls).get("protected_axes", {}))
+    declarations.append(local_axes)
     for declared_axes in declarations:
         if not isinstance(declared_axes, dict):
             msg = f"{cls.__name__} must define protected_axes as a non-empty dict[str, int]."
@@ -38,7 +136,7 @@ def inherit_protected_axes(cls: type) -> dict[str, int]:
                 )
                 raise TypeError(msg)
             axes[name] = value
-    return axes
+    return {name: count for name, count in axes.items() if name not in local_axes} | local_axes
 
 
 class AxisProtectedCreator[V, R](Protocol):
@@ -49,29 +147,6 @@ class AxisProtectedCreator[V, R](Protocol):
         ...
 
 
-@runtime_checkable
-class SupportsProtectedInternals[V, R](Protocol):
-    """Structural interface for reading and rebuilding protected-axis values."""
-
-    protected_axes: dict[str, int]
-    primary_protected_name: ClassVar[str]
-    permitted_functions: set[Callable[..., Any]]
-
-    @overload
-    def protected_values(self) -> dict[str, V]: ...
-
-    @overload
-    def protected_values(self, func: Callable) -> dict[str, V] | None: ...
-
-    def protected_values(self, func: Callable | None = None) -> dict[str, V] | None:
-        """Return protected field values, optionally in a function's context."""
-        ...
-
-    def with_protected_values(self, values: dict[str, V], func: Callable | None = None) -> R:
-        """Create a copy with updated protected values."""
-        ...
-
-
 @dataclass(frozen=True, slots=True)
 class AxisProtectedInternals[V, R]:
     """Internal representation for one protected-axis object."""
@@ -79,24 +154,14 @@ class AxisProtectedInternals[V, R]:
     create: AxisProtectedCreator[V, R]
     values: dict[str, V]
     protected_axes: dict[str, int]
-    primary_name: str
     owner_type: type[Any]
+    batch_shape: tuple[int, ...]
     broadcasted_batch: frozenset[str] = frozenset()
 
     @property
-    def primary_value(self) -> V:
-        """Return the primary protected value."""
-        return self.values[self.primary_name]
-
-    @property
     def batch_ndim(self) -> int:
-        """Return the number of batch dimensions of the primary value."""
-        return value_ndim(self.primary_value) - self.protected_axes[self.primary_name]
-
-    @property
-    def batch_shape(self) -> tuple[int, ...]:
-        """Return the logical batch shape from the primary value."""
-        return batch_shape(value_shape(self.primary_value), self.protected_axes[self.primary_name])
+        """Return the logical number of batch dimensions."""
+        return len(self.batch_shape)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +184,7 @@ class InternalsExtractor[V, R](Protocol):
 
 
 def extract_axis_protected_internals[V, R](
-    obj: SupportsProtectedInternals[V, R],
+    obj: _AxisProtectedBase[V, R],
     func: Callable | None = None,
     *,
     check_is_permitted: bool = False,
@@ -134,45 +199,44 @@ def extract_axis_protected_internals[V, R](
     Returns:
         Extracted internals, or None for an unsupported layout or function.
     """
-    protected_axes = obj.protected_axes
-    if not isinstance(protected_axes, dict) or len(protected_axes) == 0:
+    protected_axes = obj._effective_protected_axes  # noqa: SLF001
+    if not obj.protected_axes:
         return None
-    values = obj.protected_values(func) if check_is_permitted and func is not None else obj.protected_values()
+    context = func if check_is_permitted else None
+    values = obj.protected_values() if context is None else obj.protected_values(context)
     if values is None:
         return None
-
-    for name, axes in protected_axes.items():
-        if name not in values or value_ndim(values[name]) < axes:
-            return None
+    shape = obj._protected_batch_shape(values if context is None else None)  # noqa: SLF001
 
     def create(values: dict[str, V]) -> R:
         return obj.with_protected_values(values, func)
 
-    broadcasted_batch = frozenset(getattr(obj, "broadcasted_batch", ()))
+    broadcasted_batch = frozenset(getattr(obj, "broadcasted_batch", ())).intersection(protected_axes)
     return AxisProtectedInternals(
         create=create,
         values=dict(values),
         protected_axes=dict(protected_axes),
-        primary_name=obj.primary_protected_name,
         owner_type=type(obj),
         broadcasted_batch=broadcasted_batch,
+        batch_shape=shape,
     )
 
 
-def primary_protected_name(
-    protected_axes: Mapping[str, int], broadcasted_batch: set[str] | frozenset[str] = frozenset()
-) -> str:
-    """Select the first field whose batch shape is not permitted to broadcast."""
-    return next(name for name in protected_axes if name not in broadcasted_batch)
+def primary_protected_name(protected_axes: Mapping[str, int]) -> str:
+    """Select the first declared protected field, independently of constructor order."""
+    return next(iter(protected_axes))
 
 
 def validate_batch_sync(
     values: Mapping[str, object],
     protected_axes: Mapping[str, int],
-    primary_name: str,
     broadcasted_batch: set[str] | frozenset[str] = frozenset(),
-) -> None:
-    """Validate protected axes and exact or explicitly broadcastable batch shapes."""
+) -> tuple[int, ...]:
+    """Resolve and validate the batch shape implied by the protected fields.
+
+    The first unmarked field determines shape without broadcast inference.
+    If every field is marked, their batch shapes are broadcast together.
+    """
     shapes: dict[str, tuple[int, ...]] = {}
     for name, value in values.items():
         axes = protected_axes[name]
@@ -184,24 +248,25 @@ def validate_batch_sync(
         shapes[name] = batch_shape(shape, axes)
 
     if not shapes:
-        return
-    expected = shapes[primary_name]
+        return ()
+    witness = next((name for name in shapes if name not in broadcasted_batch), None)
+    expected = shapes[witness] if witness is not None else np.broadcast_shapes(*shapes.values())
     for name, current in shapes.items():
         if name in broadcasted_batch:
             if len(current) > len(expected) or any(
                 size not in (1, target) for size, target in zip(reversed(current), reversed(expected), strict=False)
             ):
-                msg = f"Batch shape {current} of field {name!r} cannot broadcast to primary batch shape {expected}."
+                msg = f"Batch shape {current} of field {name!r} cannot broadcast to logical batch shape {expected}."
                 raise ValueError(msg)
         elif current != expected:
             msg = "Operation produced inconsistent batch-shapes across protected fields."
             raise ValueError(msg)
+    return expected
 
 
 def apply_unary[V, R](internals: AxisProtectedInternals[V, R], op: Callable[[str, V, int], V]) -> R:
-    """Transform protected fields, validate their batch shapes, and rebuild."""
+    """Transform protected fields and rebuild, trusting the operation's layout."""
     results = {name: op(name, value, internals.protected_axes[name]) for name, value in internals.values.items()}
-    validate_batch_sync(results, internals.protected_axes, internals.primary_name, internals.broadcasted_batch)
     return internals.create(results)
 
 
@@ -238,6 +303,7 @@ def extract_protected_value_sequence_internals[V, R](
 
         if template is None:
             template = internals
+            require_effective_fields(template.protected_axes)
             values_by_field = {name: [] for name in internals.protected_axes}
         elif internals.protected_axes != template.protected_axes:
             msg = "All protected inputs must share identical protected_axes definitions."
@@ -335,6 +401,7 @@ def internals_override[V, R](
     check_is_permitted: bool = False,
     *,
     extract: InternalsExtractor[V, R],
+    allow_empty: bool = True,
 ) -> Callable[[BoundFunctionWithInternals[V, R]], FunctionOverride]:
     """Adapt a bound handler using a backend-typed internals extractor.
 
@@ -342,6 +409,7 @@ def internals_override[V, R](
         parameter_name: Bound parameter containing the protected object.
         check_is_permitted: Whether to read values in the function's context.
         extract: Backend adapter that determines the protected-value family.
+        allow_empty: Whether the operation works without independent fields.
 
     Returns:
         A decorator that binds arguments and extracts protected internals.
@@ -353,6 +421,8 @@ def internals_override[V, R](
             internals = extract(params.arguments[parameter_name], func, check_is_permitted=check_is_permitted)
             if internals is None:
                 return NotImplemented
+            if not allow_empty:
+                require_effective_fields(internals.protected_axes)
             return handler(func, params, internals)
 
         return function_override(wrapper)
@@ -408,6 +478,15 @@ def value_shape(value: object) -> tuple[int, ...]:
 def batch_shape(shape: tuple[int, ...], protected_axes: int) -> tuple[int, ...]:
     """Return the batch prefix of a full shape."""
     return shape if protected_axes == 0 else shape[:-protected_axes]
+
+
+def flattened_batch_shape(shape: tuple[int, ...], protected_axes: int) -> tuple[int, ...]:
+    """Collapse batch dimensions to one axis, retaining the protected suffix.
+
+    An unbatched value becomes a batch of length one. Explicit multiplication
+    preserves the batch size even when a protected dimension has length zero.
+    """
+    return (math.prod(batch_shape(shape, protected_axes)), *protected_shape(shape, protected_axes))
 
 
 def protected_shape(shape: tuple[int, ...], protected_axes: int) -> tuple[int, ...]:

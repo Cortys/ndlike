@@ -8,16 +8,17 @@ from flextype import switchdispatch
 import numpy as np
 
 from ndlike.array_like import NumpyLike
-from ndlike.protected_axis._common_functions import (
+from ndlike.protected_axis._common import (
     AxisProtectedCreator,
     AxisProtectedInternals,
     BoundFunctionWithInternals,
     FunctionOverride,
     ProtectedValueSequenceInternals,
-    SupportsProtectedInternals,
+    _AxisProtectedBase,
     apply_unary as _apply_unary,
     extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
+    flattened_batch_shape,
     function_override as numpy_function_override,
     internals_override,
     map_batch_axes as _map_batch_axes,
@@ -25,7 +26,6 @@ from ndlike.protected_axis._common_functions import (
     normalize_axis,
     normalize_batch_reduction_axes as _normalize_batch_reduction_axes,
     protected_shape,
-    validate_batch_sync as _validate_batch_sync,
     value_ndim,
     value_shape,
 )
@@ -47,11 +47,11 @@ def numpy_axis_protected_internals(
     obj: object, func: Callable | None = None, *, check_is_permitted: bool = False
 ) -> NumpyAxisProtectedInternals | None:
     """Extract protected-axis internals from object."""
-    if not isinstance(obj, SupportsProtectedInternals):
+    if not isinstance(obj, _AxisProtectedBase):
         return None
-    # Dispatch establishes the value family; runtime protocol checks only test members.
+    # Dispatch establishes the backend value family.
     return extract_axis_protected_internals(
-        cast("SupportsProtectedInternals[NumpyProtectedValue, Any]", obj),
+        cast("_AxisProtectedBase[NumpyProtectedValue, Any]", obj),
         func,
         check_is_permitted=check_is_permitted,
     )
@@ -79,13 +79,17 @@ def numpy_function(
 def numpy_internals_override(
     array_param_name: str,
     check_is_permitted: bool = False,
+    *,
+    allow_empty: bool = False,
 ) -> Callable[[_NumpyBoundFunctionWithInternals], FunctionOverride]:
     """Decorator for functions that operate on one protected-axis argument."""
-    return internals_override(array_param_name, check_is_permitted, extract=numpy_axis_protected_internals)
+    return internals_override(
+        array_param_name, check_is_permitted, extract=numpy_axis_protected_internals, allow_empty=allow_empty
+    )
 
 
 @numpy_function.register(np.copy)
-@numpy_internals_override("a")
+@numpy_internals_override("a", allow_empty=True)
 def protected_copy_function(
     func: Callable,
     params: BoundArguments,
@@ -98,13 +102,13 @@ def protected_copy_function(
         if len(internals.protected_axes) != 1:
             msg = "Cannot copy multi-field protected object with subok=False."
             raise TypeError(msg)
-        return func(internals.primary_value, order=order, subok=subok)
+        return func(next(iter(internals.values.values())), order=order, subok=subok)
 
     return _apply_unary(internals, lambda _name, value, _axes: func(value, order=order, subok=subok))
 
 
 @numpy_function.register(np.astype)
-@numpy_internals_override("x")
+@numpy_internals_override("x", allow_empty=True)
 def protected_astype_function(
     func: Callable,
     params: BoundArguments,
@@ -175,7 +179,6 @@ def protected_batch_reduction_function(  # noqa: PLR0912
     if out is not None:
         return out
 
-    _validate_batch_sync(results, internals.protected_axes, internals.primary_name)
     return internals.create(results)
 
 
@@ -279,7 +282,7 @@ def protected_expand_dims_function(
 
     def op(_name: str, value: NumpyProtectedValue, axes_count: int) -> NumpyProtectedValue:
         batch_ndim = value_ndim(value) - axes_count
-        full_axes = normalize_axes(axis_tuple, batch_ndim, allow_endpoint=True)
+        full_axes = normalize_axes(axis_tuple, batch_ndim + len(axis_tuple) - 1, allow_endpoint=True)
         return func(value, axis=full_axes)
 
     return _apply_unary(internals, op)
@@ -387,8 +390,8 @@ def protected_concatenate_function(
     kwargs: dict[str, Any],
 ) -> Any:  # noqa: ANN401
     values = tuple(args[0])
-    axis = kwargs.get("axis", 0)
-    out = kwargs.get("out")
+    axis = kwargs.get("axis", args[1] if len(args) > 1 else 0)
+    out = kwargs.get("out", args[2] if len(args) > 2 else None)
 
     out_internals = numpy_axis_protected_internals(out, None)
     sequence = _extract_protected_value_sequence_internals(values, None)
@@ -400,10 +403,15 @@ def protected_concatenate_function(
         msg = "out must use the same protected_axes layout as input values."
         raise ValueError(msg)
 
+    if out is not None and out_internals is None and len(template.protected_axes) != 1:
+        msg = "non-protected out is only supported for single-field protected objects."
+        raise TypeError(msg)
+
     if axis is not None and not isinstance(axis, int):
         msg = "concatenate axis must be an int or None."
         raise TypeError(msg)
 
+    field_kwargs = {key: value for key, value in kwargs.items() if key not in {"axis", "out"}}
     results: dict[str, NumpyProtectedValue] = {}
     for name, axes_count in template.protected_axes.items():
         if not sequence.has_protected:
@@ -411,20 +419,29 @@ def protected_concatenate_function(
             raise TypeError(msg)
 
         field_values = sequence.values_by_field[name]
-        mapped_axis: int | None = None
-        if axis is not None:
+        if axis is None:
+            # NumPy accepts a single concatenation axis, so collapse batch axes
+            # first. An explicit size also handles zero-sized protected suffixes.
+            flattened = []
+            for field_value in field_values:
+                shape = (
+                    value_shape(field_value) if hasattr(field_value, "shape") else np.shape(cast("Any", field_value))
+                )
+                flattened.append(np.reshape(cast("Any", field_value), flattened_batch_shape(shape, axes_count)))
+            field_values = flattened
+            mapped_axis = 0
+        else:
             batch_ndim = value_ndim(template.values[name]) - axes_count
             mapped_axis = normalize_axis(axis, batch_ndim)
 
-        out_value = out_internals.values[name] if out_internals is not None else None
-        result = func(field_values, axis=mapped_axis, out=out_value)
+        out_value = out_internals.values[name] if out_internals is not None else out
+        result = func(field_values, axis=mapped_axis, out=out_value, **field_kwargs)
         if out_value is None:
             results[name] = result
 
     if out is not None:
         return out
 
-    _validate_batch_sync(results, template.protected_axes, template.primary_name)
     return template.create(results)
 
 
@@ -470,5 +487,4 @@ def protected_stack_function(
     if out is not None:
         return out
 
-    _validate_batch_sync(results, template.protected_axes, template.primary_name)
     return template.create(results)

@@ -10,10 +10,11 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, overload, override
 import numpy as np
 import torch
 
-from ndlike.protected_axis._common_functions import (
-    batch_shape,
-    inherit_protected_axes,
+from ndlike.protected_axis._common import (
+    _AxisProtectedBase,
+    primary_protected_name,
     protected_shape,
+    require_effective_fields,
     value_ndim,
     value_shape,
 )
@@ -36,7 +37,9 @@ def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
         raise ValueError(msg)
 
 
-class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImplementation[T], ABC):
+class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
+    _AxisProtectedBase[TorchProtectedValue, "TorchAxisProtected[T]"], TorchLikeImplementation[T], ABC
+):
     """ABC for representations with protected torch-like fields and optional NumPy sidecars."""
 
     protected_axes: ClassVar[dict[str, int]] = {}
@@ -46,7 +49,6 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
 
-        cls.protected_axes = inherit_protected_axes(cls)
         if cls is TorchAxisProtected or isabstract(cls):
             return
 
@@ -55,7 +57,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
             msg = f"{cls.__name__} must define protected_axes as a non-empty dict[str, int]."
             raise TypeError(msg)
 
-        cls.primary_protected_name = next(iter(axes))
+        cls.primary_protected_name = primary_protected_name(axes)
 
         permitted_functions = getattr(cls, "permitted_functions", set())
         if not isinstance(permitted_functions, set) or not all(callable(func) for func in permitted_functions):
@@ -63,60 +65,14 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
             raise TypeError(msg)
         cls.permitted_functions = set(permitted_functions)
 
-    def _postprocess_protected_values[V: TorchProtectedValue](
-        self, values: dict[str, V], func: Callable
-    ) -> dict[str, V]:
-        """Optionally postprocess protected values based on the triggering function."""
-        del func
-        return values
-
-    @overload
-    def protected_values(self) -> dict[str, TorchProtectedValue]: ...
-
-    @overload
-    def protected_values(self, func: Callable) -> dict[str, TorchProtectedValue] | None: ...
-
-    def protected_values(self, func: Callable | None = None) -> dict[str, TorchProtectedValue] | None:
-        """Return all protected field values as-is.
-
-        Optionally takes the torch function that triggered the call for context.
-        This can be used to conditionally modify the returned values or prevent them from being accessed.
-        """
-        if func is not None and func not in type(self).permitted_functions:
-            return None
-
-        values: dict[str, TorchProtectedValue] = {}
-        primary_name = type(self).primary_protected_name
-        primary_batch: tuple[int, ...] | None = None
-
-        for name, axes in type(self).protected_axes.items():
-            value = cast("TorchProtectedValue", getattr(self, name))
-            ndim = value_ndim(value)
-            shape = value_shape(value)
-            _validate_field_ndim(name, ndim, axes)
-
-            current_batch = batch_shape(shape, axes)
-            if name == primary_name:
-                primary_batch = current_batch
-            elif primary_batch is not None and current_batch != primary_batch:
-                msg = "Protected fields do not share the same batch-shape."
-                raise ValueError(msg)
-
-            values[name] = value
-
-        if func is not None:
-            values = self._postprocess_protected_values(values, func)
-
-        return values
-
     def protected_value(self) -> TorchProtectedValue:
         """Return the primary protected value."""
-        primary_name = type(self).primary_protected_name
-        return self.protected_values()[primary_name]
+        return getattr(self, type(self).primary_protected_name)
 
     def _torch_protected_value(self) -> TorchLike[Any] | torch.Tensor:
-        """Return the first torch-like protected value."""
-        for value in self.protected_values().values():
+        """Return the first declared torch-like field, including init=False fields."""
+        for name in type(self).protected_axes:
+            value = getattr(self, name)
             if not isinstance(value, np.ndarray):
                 return value
 
@@ -144,7 +100,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
         if self.ndim == 0:
             msg = "len() of unsized object"
             raise TypeError(msg)
-        return len(cast("Any", self.protected_value()))
+        return self.shape[0]
 
     @override
     def __iter__(self) -> Iterator[Any]:
@@ -169,13 +125,6 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
     @property
     def device(self) -> torch.device:
         return cast("torch.device", self._torch_protected_value().device)
-
-    @override
-    @property
-    def shape(self) -> tuple[int, ...]:
-        primary_name = type(self).primary_protected_name
-        axes = type(self).protected_axes[primary_name]
-        return batch_shape(value_shape(self.protected_value()), axes)
 
     @property
     def protected_shape(self) -> tuple[int, ...]:
@@ -214,7 +163,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
         return value
 
     def _coerce_assignment_value(self, value: object) -> Mapping[str, object]:
-        field_names = tuple(type(self).protected_axes.keys())
+        field_names = tuple(self._effective_protected_axes.keys())
 
         if isinstance(value, type(self)):
             candidate_values: Mapping[str, object] = value.protected_values()
@@ -230,7 +179,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
             raise TypeError(msg)
 
         current_values = self.protected_values()
-        for name, axes in type(self).protected_axes.items():
+        for name, axes in self._effective_protected_axes.items():
             candidate = candidate_values[name]
             if axes == 0:
                 continue
@@ -248,10 +197,11 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
 
     @override
     def __getitem__(self, index: ToIndices, /) -> TorchAxisProtected[T]:
+        require_effective_fields(self._effective_protected_axes)
         values = self.protected_values()
         indexed: dict[str, TorchProtectedValue] = {}
 
-        for name, axes in type(self).protected_axes.items():
+        for name, axes in self._effective_protected_axes.items():
             full_index = self._index_with_protected_axes(index, axes)
             value = values[name]
             result = cast("Any", value)[full_index]
@@ -276,11 +226,12 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
 
     @override
     def __setitem__(self, index: ToIndices, value: object, /) -> None:
+        require_effective_fields(self._effective_protected_axes)
         value = self._prepare_assignment_value(value)
         values = self.protected_values()
         candidate_values = self._coerce_assignment_value(value)
 
-        for name, axes in type(self).protected_axes.items():
+        for name, axes in self._effective_protected_axes.items():
             full_index = self._index_with_protected_axes(index, axes)
             cast("Any", values[name])[full_index] = candidate_values[name]
 
@@ -327,10 +278,10 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](TorchLikeImpl
 
     @override
     def numpy(self, *, force: bool = False) -> np.ndarray:
-        if len(type(self).protected_axes) != 1:
+        if len(self._effective_protected_axes) != 1:
             msg = "Cannot convert multi-field protected object to a single numpy array."
             raise TypeError(msg)
-        value = self.protected_value()
+        value = next(iter(self.protected_values().values()))
         if isinstance(value, np.ndarray):
             return value.copy() if force else value
         return value.numpy(force=force)

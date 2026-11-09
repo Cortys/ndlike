@@ -17,12 +17,14 @@ from ndlike.array_like import (
     Order,
     ToIndices,
 )
-from ndlike.protected_axis._common_functions import (
+from ndlike.protected_axis._common import (
+    _AxisProtectedBase,
     batch_shape,
-    inherit_protected_axes,
     normalize_axes,
     normalize_axis,
+    primary_protected_name,
     protected_shape,
+    require_effective_fields,
     value_ndim,
     value_shape,
 )
@@ -44,7 +46,9 @@ def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
         raise ValueError(msg)
 
 
-class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], ABC):
+class NumpyAxisProtected[T: NumpyLike | np.ndarray](
+    _AxisProtectedBase[NumpyProtectedValue, "NumpyAxisProtected[T]"], NumpyLikeImplementation[T], ABC
+):
     """ABC for representations with one or multiple protected array-like fields."""
 
     protected_axes: ClassVar[dict[str, int]] = {}
@@ -55,7 +59,6 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
 
-        cls.protected_axes = inherit_protected_axes(cls)
         if cls is NumpyAxisProtected or isabstract(cls):
             return
 
@@ -64,7 +67,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
             msg = f"{cls.__name__} must define protected_axes as a non-empty dict[str, int]."
             raise TypeError(msg)
 
-        cls.primary_protected_name = next(iter(axes))
+        cls.primary_protected_name = primary_protected_name(axes)
 
         permitted_ufuncs = getattr(cls, "permitted_ufuncs", {})
         if not isinstance(permitted_ufuncs, dict):
@@ -88,67 +91,25 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
             raise TypeError(msg)
         cls.permitted_functions = set(permitted_functions)
 
-    def _postprocess_protected_values[V: NumpyProtectedValue](
-        self, values: dict[str, V], func: Callable
-    ) -> dict[str, V]:
-        """Optionally postprocess protected values based on the triggering function."""
-        del func
-        return values
+    @overload
+    def protected_values(self, func: None = None, method: None = None) -> dict[str, NumpyProtectedValue]: ...
 
     @overload
-    def protected_values(self) -> dict[str, NumpyProtectedValue]: ...
-
-    @overload
-    def protected_values(self, func: Callable) -> dict[str, NumpyProtectedValue] | None: ...
-
-    @overload
-    def protected_values(self, func: np.ufunc, method: str) -> dict[str, NumpyProtectedValue] | None: ...
+    def protected_values(self, func: Callable, method: str | None = None) -> dict[str, NumpyProtectedValue] | None: ...
 
     def protected_values(
         self, func: Callable | None = None, method: str | None = None
     ) -> dict[str, NumpyProtectedValue] | None:
-        """Return all protected field values.
-
-        The values are preserved as-is and are not coerced to ``np.ndarray``.
-        Optionally takes the function that triggered the call for context.
-        This can be used to conditionally modify the returned values or prevent them from being accessed.
-        """
-        if func is not None:
-            if method is not None:
-                permitted_methods = type(self).permitted_ufuncs.get(func)
-                if permitted_methods is None or method not in permitted_methods:
-                    return None
-            elif func not in type(self).permitted_functions:
-                return None
-
-        values: dict[str, NumpyProtectedValue] = {}
-        primary_name = type(self).primary_protected_name
-        primary_batch: tuple[int, ...] | None = None
-
-        for name, axes in type(self).protected_axes.items():
-            value = cast("NumpyProtectedValue", getattr(self, name))
-            ndim = value_ndim(value)
-            shape = value_shape(value)
-            _validate_field_ndim(name, ndim, axes)
-
-            current_batch = batch_shape(shape, axes)
-            if name == primary_name:
-                primary_batch = current_batch
-            elif primary_batch is not None and current_batch != primary_batch:
-                msg = "Protected fields do not share the same batch-shape."
-                raise ValueError(msg)
-
-            values[name] = value
-
-        if func is not None:
-            values = self._postprocess_protected_values(values, func)
-
-        return values
+        """Read effective values, with optional NumPy function or ufunc permissions."""
+        if func is None or method is None:
+            return super().protected_values(func)
+        if method not in type(self).permitted_ufuncs.get(func, ()):
+            return None
+        return self._postprocess_protected_values(super().protected_values(), func)
 
     def protected_value(self) -> NumpyProtectedValue:
         """Return the primary protected value."""
-        primary_name = type(self).primary_protected_name
-        return self.protected_values()[primary_name]
+        return getattr(self, type(self).primary_protected_name)
 
     @overload
     def with_protected_values(
@@ -195,7 +156,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
         if self.ndim == 0:
             msg = "len() of unsized object"
             raise TypeError(msg)
-        return len(cast("Any", self.protected_value()))
+        return self.shape[0]
 
     @override
     def __iter__(self) -> Iterator[Any]:
@@ -208,10 +169,10 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
 
     @override
     def __array__(self, dtype: DTypeLike | None = None, /, *, copy: bool | None = None) -> np.ndarray:
-        if len(type(self).protected_axes) != 1:
+        if len(self._effective_protected_axes) != 1:
             msg = "Cannot convert multi-field protected object to a single numpy array."
             raise TypeError(msg)
-        return np.asarray(self.protected_value(), dtype=dtype, copy=copy)
+        return np.asarray(next(iter(self.protected_values().values())), dtype=dtype, copy=copy)
 
     @override
     @property
@@ -222,13 +183,6 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
     @property
     def device(self) -> str:
         return self.protected_value().device
-
-    @override
-    @property
-    def shape(self) -> tuple[int, ...]:
-        primary_name = type(self).primary_protected_name
-        axes = type(self).protected_axes[primary_name]
-        return batch_shape(value_shape(self.protected_value()), axes)
 
     @property
     def protected_shape(self) -> tuple[int, ...]:
@@ -256,7 +210,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
         return value
 
     def _coerce_assignment_value(self, value: object) -> Mapping[str, object]:
-        field_names = tuple(type(self).protected_axes.keys())
+        field_names = tuple(self._effective_protected_axes.keys())
 
         if isinstance(value, type(self)):
             candidate_values: Mapping[str, object] = value.protected_values()
@@ -272,7 +226,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
             raise TypeError(msg)
 
         current_values = self.protected_values()
-        for name, axes in type(self).protected_axes.items():
+        for name, axes in self._effective_protected_axes.items():
             candidate = candidate_values[name]
             if axes == 0:
                 continue
@@ -290,10 +244,11 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
 
     @override
     def __getitem__(self, index: ToIndices, /) -> Self:
+        require_effective_fields(self._effective_protected_axes)
         values = self.protected_values()
         indexed: dict[str, NumpyProtectedValue] = {}
 
-        for name, axes in type(self).protected_axes.items():
+        for name, axes in self._effective_protected_axes.items():
             full_index = self._index_with_protected_axes(index, axes)
             result = cast("Any", values[name])[full_index]
 
@@ -315,11 +270,12 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
 
     @override
     def __setitem__(self, index: ToIndices, value: object, /) -> None:
+        require_effective_fields(self._effective_protected_axes)
         value = self._prepare_assignment_value(value)
         values = self.protected_values()
         candidate_values = self._coerce_assignment_value(value)
 
-        for name, axes in type(self).protected_axes.items():
+        for name, axes in self._effective_protected_axes.items():
             full_index = self._index_with_protected_axes(index, axes)
             values[name][full_index] = candidate_values[name]  # ty:ignore[invalid-assignment]
 
@@ -344,11 +300,13 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
         if method not in {"__call__", "reduce", "accumulate", "reduceat"}:
             return NotImplemented
 
-        protected_axes = type(self).protected_axes
+        protected_axes = self._effective_protected_axes
+        if method != "__call__":
+            require_effective_fields(protected_axes)
         input_values: list[dict[str, NumpyProtectedValue] | None] = []
         for value in inputs:
             if isinstance(value, type(self)):
-                value_protected_axes = type(value).protected_axes
+                value_protected_axes = value._effective_protected_axes  # noqa: SLF001
                 if value_protected_axes != protected_axes:
                     msg = "All protected inputs must share identical protected_axes definitions."
                     raise ValueError(msg)
@@ -368,7 +326,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](NumpyLikeImplementation[T], 
         out_values: list[dict[str, NumpyProtectedValue] | None] = []
         for value in out_items:
             if isinstance(value, type(self)):
-                value_protected_axes = type(value).protected_axes
+                value_protected_axes = value._effective_protected_axes  # noqa: SLF001
                 if value_protected_axes != protected_axes:
                     msg = "All protected outputs must share identical protected_axes definitions."
                     raise ValueError(msg)

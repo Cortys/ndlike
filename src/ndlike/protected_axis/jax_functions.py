@@ -34,18 +34,19 @@ from ndlike.jax_functions import (
     jax_var,
 )
 from ndlike.jax_like import JaxLike
-from ndlike.protected_axis._common_functions import (
+from ndlike.protected_axis._common import (
     AxisProtectedCreator,
     AxisProtectedInternals,
     BoundFunctionWithInternals,
     FunctionOverride,
     ProtectedValueSequenceInternals,
-    SupportsProtectedInternals,
+    _AxisProtectedBase,
     apply_structural_op as _apply_structural_op,
     apply_unary as _apply_unary,
     batch_shape,
     extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
+    flattened_batch_shape,
     function_override as jax_function_override,
     has_numpy_protected_value as _has_numpy_protected_value,
     internals_override,
@@ -54,7 +55,7 @@ from ndlike.protected_axis._common_functions import (
     normalize_axis,
     normalize_batch_reduction_axes as _normalize_batch_reduction_dims,
     protected_shape,
-    validate_batch_sync as _validate_batch_sync,
+    validate_batch_sync,
     value_ndim,
     value_shape,
 )
@@ -109,11 +110,11 @@ def jax_axis_protected_internals(
     Shape-only single-entry fields are normalized to batch shape ``()`` so they
     remain broadcastable when the operation changes the logical batch rank.
     """
-    if not isinstance(obj, SupportsProtectedInternals):
+    if not isinstance(obj, _AxisProtectedBase):
         return None
-    # Dispatch establishes the value family; runtime protocol checks only test members.
+    # Dispatch establishes the backend value family.
     internals = extract_axis_protected_internals(
-        cast("SupportsProtectedInternals[JaxProtectedValue, Any]", obj),
+        obj,
         func,
         check_is_permitted=check_is_permitted,
     )
@@ -125,6 +126,7 @@ def jax_axis_protected_internals(
         axes = internals.protected_axes[name]
         if (
             func in _SHAPE_ONLY
+            and len(internals.broadcasted_batch) < len(internals.protected_axes)
             and name in internals.broadcasted_batch
             and math.prod(batch_shape(value_shape(value), axes)) == 1
         ):
@@ -148,7 +150,7 @@ def _apply_shape_only(
     op: Callable[[str, JaxProtectedValue, int], JaxProtectedValue],
 ) -> Any:  # noqa: ANN401
     """Apply a batch-shape operation, reusing fields normalized to batch shape ``()``."""
-    if not internals.broadcasted_batch:
+    if not internals.broadcasted_batch or len(internals.broadcasted_batch) == len(internals.protected_axes):
         return _apply_unary(internals, op)
 
     def field_op(name: str, value: JaxProtectedValue, axes: int) -> JaxProtectedValue:
@@ -201,13 +203,17 @@ def jax_function(
 def _jax_internals_override(
     jax_param_name: str,
     check_is_permitted: bool = False,
+    *,
+    allow_empty: bool = False,
 ) -> Callable[[_JaxBoundFunctionWithInternals], FunctionOverride]:
     """Decorator to convert a function taking a protected-axis argument."""
-    return internals_override(jax_param_name, check_is_permitted, extract=jax_axis_protected_internals)
+    return internals_override(
+        jax_param_name, check_is_permitted, extract=jax_axis_protected_internals, allow_empty=allow_empty
+    )
 
 
 @jax_function.register(jax_copy)
-@_jax_internals_override("a")
+@_jax_internals_override("a", allow_empty=True)
 def protected_copy_function(
     func: Callable,
     params: BoundArguments,
@@ -221,7 +227,7 @@ def protected_copy_function(
 
 
 @jax_function.register(jax_astype)
-@_jax_internals_override("x")
+@_jax_internals_override("x", allow_empty=True)
 def protected_astype_function(
     func: Callable,
     params: BoundArguments,
@@ -283,7 +289,6 @@ def protected_batch_reduction_function(
 
         results[name] = cast("JaxProtectedValue", result)
 
-    _validate_batch_sync(results, internals.protected_axes, internals.primary_name, internals.broadcasted_batch)
     return internals.create(results)
 
 
@@ -372,7 +377,11 @@ def protected_reshape_function(
 
     def op(name: str, value: JaxProtectedValue, axes_count: int) -> JaxProtectedValue:
         suffix = protected_shape(value_shape(value), axes_count)
-        single_entry = name in internals.broadcasted_batch and value_ndim(value) == axes_count
+        single_entry = (
+            len(internals.broadcasted_batch) < len(internals.protected_axes)
+            and name in internals.broadcasted_batch
+            and value_ndim(value) == axes_count
+        )
         target_shape = suffix if single_entry else (*batch_target_shape, *suffix)
         return _apply_structural_op(
             value,
@@ -422,7 +431,7 @@ def protected_expand_dims_function(
 
     def op(_name: str, value: JaxProtectedValue, axes_count: int) -> JaxProtectedValue:
         batch_ndim = value_ndim(value) - axes_count
-        full_axes = normalize_axes(axis_tuple, batch_ndim, allow_endpoint=True)
+        full_axes = normalize_axes(axis_tuple, batch_ndim + len(axis_tuple) - 1, allow_endpoint=True)
         return _apply_structural_op(
             value,
             lambda field_value: func(field_value, axis=full_axes),
@@ -570,8 +579,15 @@ def protected_concatenate_function(
 
         value = template.values[name]
         field_values = sequence.values_by_field[name]
-        mapped_axis: int | None = None
-        if axis is not None:
+        if axis is None:
+            field_values = [
+                np.reshape(field, flattened_batch_shape(value_shape(field), axes_count))
+                if isinstance(field, np.ndarray)
+                else jax_reshape(cast("Any", field), flattened_batch_shape(value_shape(field), axes_count))
+                for field in field_values
+            ]
+            mapped_axis = 0
+        else:
             batch_ndim = value_ndim(value) - axes_count
             mapped_axis = normalize_axis(axis, batch_ndim)
         if isinstance(value, np.ndarray):
@@ -591,7 +607,6 @@ def protected_concatenate_function(
 
         results[name] = cast("JaxProtectedValue", result)
 
-    _validate_batch_sync(results, template.protected_axes, template.primary_name, template.broadcasted_batch)
     return template.create(results)
 
 
@@ -634,7 +649,6 @@ def protected_stack_function(
             result = func(field_values, axis=mapped_axis, dtype=dtype)
         results[name] = result
 
-    _validate_batch_sync(results, template.protected_axes, template.primary_name, template.broadcasted_batch)
     return template.create(results)
 
 
@@ -652,16 +666,21 @@ def protected_take_along_axis_function(
     mode = params.arguments.get("mode")
     fill_value = params.arguments.get("fill_value")
 
-    if not isinstance(axis, int) or not isinstance(indices, (jax.Array, np.ndarray)):
+    if (axis is not None and not isinstance(axis, int)) or not isinstance(indices, (jax.Array, np.ndarray)):
         return NotImplemented
-    if indices.ndim != internals.batch_ndim:
+    batch_ndim = 1 if axis is None else internals.batch_ndim
+    if indices.ndim != batch_ndim:
         msg = "take_along_axis indices must have the same ndim as the protected object's batch dimensions."
         raise ValueError(msg)
 
     results: dict[str, JaxProtectedValue] = {}
     for name, axes_count in internals.protected_axes.items():
         value = internals.values[name]
-        mapped_axis = normalize_axis(axis, value_ndim(value) - axes_count)
+        if axis is None:
+            value = jax_reshape(value, flattened_batch_shape(value_shape(value), axes_count))
+            mapped_axis = 0
+        else:
+            mapped_axis = normalize_axis(axis, value_ndim(value) - axes_count)
 
         field_index = indices
         for _ in range(axes_count):
@@ -672,12 +691,11 @@ def protected_take_along_axis_function(
 
         results[name] = func(value, field_index, mapped_axis, mode=mode, fill_value=fill_value)
 
-    _validate_batch_sync(results, internals.protected_axes, internals.primary_name, internals.broadcasted_batch)
     return internals.create(results)
 
 
 @jax_function.register(jax_conj)
-@_jax_internals_override("x")
+@_jax_internals_override("x", allow_empty=True)
 def protected_conj_function(
     func: Callable,
     params: BoundArguments,  # noqa: ARG001
@@ -709,7 +727,7 @@ def _operator_inputs(
     template: JaxAxisProtectedInternals | None = None
     inputs: list[JaxAxisProtectedInternals | None] = []
     for arg in args:
-        if not isinstance(arg, SupportsProtectedInternals):
+        if not isinstance(arg, _AxisProtectedBase):
             if jf.has_jax_function((arg,)) or not isinstance(
                 arg, (jax.Array, np.ndarray, np.number, np.bool_, bool, int, float, complex)
             ):
@@ -746,7 +764,9 @@ def _validate_operator_result(values: dict[str, Any], template: JaxAxisProtected
     if values.keys() != template.values.keys():
         msg = "Operator results must contain every protected field."
         raise ValueError(msg)
-    _validate_batch_sync(values, template.protected_axes, template.primary_name, template.broadcasted_batch)
+    # Raw operands can broadcast differently against fields with different
+    # protected ranks, even when the input representation is valid.
+    validate_batch_sync(values, template.protected_axes, template.broadcasted_batch)
     for name, axes in template.protected_axes.items():
         if protected_shape(value_shape(values[name]), axes) != protected_shape(
             value_shape(template.values[name]), axes
@@ -760,13 +780,13 @@ def _batch_comparison(values: dict[str, Any], template: JaxAxisProtectedInternal
     any_difference = func is jf.jax_not_equal
     reduce = jnp.any if any_difference else jnp.all
     combine = jnp.logical_or if any_difference else jnp.logical_and
-    result = None
+    result = jnp.full(template.batch_shape, not any_difference, dtype=jnp.bool_)
     for name, value in values.items():
         count = template.protected_axes[name]
         axes = tuple(range(value.ndim - count, value.ndim))
         field_result = reduce(value, axis=axes)
-        result = field_result if result is None else combine(result, field_result)
-    return cast("jax.Array", result)
+        result = combine(result, field_result)
+    return result
 
 
 @jax_function.multi_register(

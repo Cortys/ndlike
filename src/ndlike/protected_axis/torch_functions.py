@@ -9,12 +9,12 @@ from flextype import switchdispatch
 import numpy as np
 import torch
 
-from ndlike.protected_axis._common_functions import (
+from ndlike.protected_axis._common import (
     AxisProtectedCreator,
     AxisProtectedInternals,
     FunctionOverride as _TorchFunction,
     ProtectedValueSequenceInternals,
-    SupportsProtectedInternals,
+    _AxisProtectedBase,
     apply_structural_op as _apply_structural_op,
     apply_unary as _apply_unary,
     coerce_axis_tuple,
@@ -26,7 +26,7 @@ from ndlike.protected_axis._common_functions import (
     normalize_axis,
     normalize_batch_reduction_axes,
     protected_shape,
-    validate_batch_sync as _validate_batch_sync,
+    require_effective_fields,
     value_ndim,
     value_shape,
 )
@@ -48,11 +48,11 @@ def torch_axis_protected_internals(
     obj: object, func: Callable | None = None, *, check_is_permitted: bool = False
 ) -> TorchAxisProtectedInternals | None:
     """Extract protected-axis internals from object."""
-    if not isinstance(obj, SupportsProtectedInternals):
+    if not isinstance(obj, _AxisProtectedBase):
         return None
-    # Dispatch establishes the value family; runtime protocol checks only test members.
+    # Dispatch establishes the backend value family.
     return extract_axis_protected_internals(
-        cast("SupportsProtectedInternals[TorchProtectedValue, Any]", obj),
+        cast("_AxisProtectedBase[TorchProtectedValue, Any]", obj),
         func,
         check_is_permitted=check_is_permitted,
     )
@@ -137,6 +137,7 @@ def torch_internals_override(
     torch_param_name: str,
     *,
     check_is_permitted: bool = False,
+    allow_empty: bool = False,
 ) -> Callable[[_TorchBoundFunctionWithInternals], _TorchFunction]: ...
 
 
@@ -145,6 +146,7 @@ def torch_internals_override(
     *,
     torch_param_pos: int,
     check_is_permitted: bool = False,
+    allow_empty: bool = False,
 ) -> Callable[[_TorchBoundFunctionWithInternals], _TorchFunction]: ...
 
 
@@ -153,6 +155,7 @@ def torch_internals_override(
     *,
     torch_param_pos: int | None = None,
     check_is_permitted: bool = False,
+    allow_empty: bool = False,
 ) -> Callable[[_TorchBoundFunctionWithInternals], _TorchFunction]:
     """Decorator to convert a function taking a protected-axis argument."""
     if torch_param_name is None and torch_param_pos is None:
@@ -187,6 +190,8 @@ def torch_internals_override(
             if internals is None:
                 return NotImplemented
 
+            if not allow_empty:
+                require_effective_fields(internals.protected_axes)
             return f(func, tuple(mutable_args), mutable_kwargs, internals)
 
         return torch_function_override(wrapper)
@@ -195,7 +200,7 @@ def torch_internals_override(
 
 
 @torch_function.register(torch.clone)
-@torch_internals_override(torch_param_pos=0)
+@torch_internals_override(torch_param_pos=0, allow_empty=True)
 def protected_clone_function(
     func: Callable,
     args: tuple[Any, ...],
@@ -288,7 +293,6 @@ def protected_batch_reduction_function(  # noqa: PLR0912
     if out is not None:
         return out
 
-    _validate_batch_sync(results, internals.protected_axes, internals.primary_name)
     return internals.create(results)
 
 
@@ -566,7 +570,6 @@ def protected_cat_function(
     if out is not None:
         return out
 
-    _validate_batch_sync(results, template.protected_axes, template.primary_name)
     return template.create(results)
 
 
@@ -621,7 +624,6 @@ def protected_gather_function(
     if out is not None:
         return out
 
-    _validate_batch_sync(results, internals.protected_axes, internals.primary_name)
     return internals.create(results)
 
 
@@ -677,5 +679,4 @@ def protected_stack_function(
     if out is not None:
         return out
 
-    _validate_batch_sync(results, template.protected_axes, template.primary_name)
     return template.create(results)

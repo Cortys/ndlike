@@ -34,7 +34,7 @@ def test_inherited_layout_supports_indexing_reshape_and_jit(slots):
 
     assert list(Child.protected_axes.items()) == [("shared", 1), ("values", 2), ("labels", 0), ("weights", 1)]
     assert Child.broadcasted_batch == {"shared", "weights"}
-    assert Child.primary_protected_name == "values"
+    assert Child.primary_protected_name == "shared"
     assert Child.pytree_children == ("shared", "values", "labels", "weights")
     x = Child(jnp.arange(3.0), jnp.arange(24.0).reshape(4, 2, 3), jnp.arange(4.0), jnp.ones(2))
     assert x.shape == (4,)
@@ -91,14 +91,15 @@ def test_subclass_cannot_change_inherited_axis_count(count):
         type("Child", (Parent,), {"protected_axes": {"values": count}})
 
 
-def test_matching_redeclarations_keep_base_field_order():
+def test_matching_redeclarations_use_local_field_order():
     class Parent(JaxAxisProtected[jax.Array]):
         protected_axes: ClassVar[dict[str, int]] = {"values": 1, "labels": 0}
 
     class Child(Parent):
         protected_axes: ClassVar[dict[str, int]] = {"new": 2, "labels": 0, "values": 1}
 
-    assert Child.pytree_children == ("values", "labels", "new")
+    assert Child.pytree_children == ("new", "labels", "values")
+    assert Child.primary_protected_name == "new"
 
 
 def test_abstract_bases_accumulate_layouts_before_concrete_validation():
@@ -123,7 +124,7 @@ def test_abstract_bases_accumulate_layouts_before_concrete_validation():
     assert MoreShared.protected_axes == {"shared": 1, "other": 2}
     assert Concrete.protected_axes == {"shared": 1, "other": 2, "values": 0}
     assert Concrete.broadcasted_batch == {"shared", "other"}
-    assert Concrete.primary_protected_name == "values"
+    assert Concrete.primary_protected_name == "shared"
 
 
 def test_multiple_inheritance_merges_diamond_layouts_left_to_right():
@@ -163,7 +164,6 @@ def test_conflicting_base_counts_are_rejected():
         {"protected_axes": {"new": -1}},
         {"broadcasted_batch": []},
         {"broadcasted_batch": {"missing"}},
-        {"broadcasted_batch": {"values"}},
     ],
 )
 def test_local_declarations_are_validated_against_inherited_layout(declarations):

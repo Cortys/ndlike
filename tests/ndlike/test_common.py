@@ -20,7 +20,7 @@ sys.meta_path.insert(0, BlockBackends())
 import ndlike
 import ndlike.array_like
 import ndlike.protected_axis
-import ndlike.protected_axis._common_functions
+import ndlike.protected_axis._common
 import ndlike.protected_axis.numpy
 import ndlike.protected_axis.numpy_functions
 assert not {'torch', 'jax', 'jaxlib', 'probly'} & sys.modules.keys()

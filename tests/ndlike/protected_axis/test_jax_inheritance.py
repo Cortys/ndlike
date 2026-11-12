@@ -83,12 +83,21 @@ def test_omitted_or_empty_declarations_preserve_independent_layouts(declarations
 
 
 @pytest.mark.parametrize("count", [0, 2])
-def test_subclass_cannot_change_inherited_axis_count(count):
+def test_local_axis_count_override_survives_jit(count):
+    @dataclass(frozen=True)
     class Parent(JaxAxisProtected[jax.Array]):
+        values: jax.Array
         protected_axes: ClassVar[dict[str, int]] = {"values": 1}
 
-    with pytest.raises(TypeError, match=r"Child.protected_axes\['values'\] conflicts.*inherited axis count"):
-        type("Child", (Parent,), {"protected_axes": {"values": count}})
+    @dataclass(frozen=True)
+    class Child(Parent):
+        protected_axes: ClassVar[dict[str, int]] = {"values": count}
+
+    x = Child(jnp.arange(24).reshape(4, 2, 3))
+    result = jax.jit(lambda value: value[0])(x)
+    assert type(result) is Child
+    assert result.shape == ((2, 3) if count == 0 else ())
+    np.testing.assert_array_equal(result.values, x.values[0])
 
 
 def test_matching_redeclarations_use_local_field_order():

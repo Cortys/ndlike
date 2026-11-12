@@ -132,10 +132,11 @@ subclasses inherit both declarations, including through abstract bases. Layouts
 merge from left to right across bases.
 
 Inherited fields and broadcast markers cannot be removed by omitting them or
-declaring empty containers. Repeating an inherited axis count is allowed;
-changing it, or inheriting conflicting counts from multiple bases, raises
-`TypeError` when defining the class. This replaces the previous behavior where
-subclass declarations replaced the inherited layout.
+declaring empty containers. A subclass can override an inherited axis count by
+declaring that field locally in `protected_axes`. Conflicting counts from
+multiple bases must also be resolved with a local declaration.
+Overrides change the batch/protected-axis split, so the subclass must ensure its
+fields and inherited methods remain compatible with the new layout.
 
 ### Fields owned by initialization
 

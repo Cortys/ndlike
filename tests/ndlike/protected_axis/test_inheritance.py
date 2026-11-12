@@ -74,26 +74,53 @@ def test_inherited_layouts_are_independent_and_cannot_be_cleared(backend, declar
 
 
 @pytest.mark.parametrize("count", [0, 2])
-def test_conflicting_subclass_counts_are_rejected(backend, count):
-    base, _ = backend
+@pytest.mark.parametrize("slots", [False, True])
+def test_local_overrides_change_operations_without_changing_parent_layout(backend, count, slots):
+    base, arrays = backend
 
+    @dataclass(frozen=True, slots=slots)
     class Parent(base):
+        values: Any
         protected_axes: ClassVar[dict[str, int]] = {"values": 1}
 
-    with pytest.raises(TypeError, match=r"Child.protected_axes\['values'\] conflicts.*inherited axis count"):
-        type("Child", (Parent,), {"protected_axes": {"values": count}})
+    parent = Parent(arrays.arange(24).reshape(4, 2, 3))
+    assert parent.shape == (4, 2)  # Resolve the parent's cached layout first.
+
+    @dataclass(frozen=True, slots=slots)
+    class Child(Parent):
+        protected_axes: ClassVar[dict[str, int]] = {"values": count}
+
+    class Grandchild(Child):
+        pass
+
+    x = Child(parent.values)
+    x.validate()
+    expected_shape = (4, 2, 3) if count == 0 else (4,)
+    assert x.shape == expected_shape
+    indexed = x[0]
+    assert type(indexed) is Child
+    assert indexed.shape == expected_shape[1:]
+    np.testing.assert_array_equal(indexed.values, parent.values[0])
+    reshaped = x.reshape(1, *expected_shape)
+    assert type(reshaped) is Child
+    assert reshaped.shape == (1, *expected_shape)
+    np.testing.assert_array_equal(reshaped.values, parent.values.reshape(1, 4, 2, 3))
+    assert Grandchild(parent.values).shape == expected_shape
+    assert Parent.protected_axes == {"values": 1}
+    assert parent.shape == (4, 2)
 
 
-def test_matching_redeclarations_follow_local_order(backend):
+@pytest.mark.parametrize("count", [1, 2])
+def test_redeclarations_follow_local_order(backend, count):
     base, _ = backend
 
     class Parent(base):
         protected_axes: ClassVar[dict[str, int]] = {"values": 1, "labels": 0}
 
     class Child(Parent):
-        protected_axes: ClassVar[dict[str, int]] = {"new": 2, "labels": 0, "values": 1}
+        protected_axes: ClassVar[dict[str, int]] = {"new": 2, "labels": 0, "values": count}
 
-    assert list(Child.protected_axes.items()) == [("new", 2), ("labels", 0), ("values", 1)]
+    assert list(Child.protected_axes.items()) == [("new", 2), ("labels", 0), ("values", count)]
     assert Child.primary_protected_name == "new"
 
 
@@ -124,20 +151,34 @@ def test_abstract_diamond_inheritance_merges_all_layouts(backend):
     assert Concrete.primary_protected_name == "values"
 
 
-def test_conflicting_base_counts_are_rejected(backend):
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("local_axes", [None, {}, {"other": 0}, {"values": 0}, {"values": 1}, {"values": 2}])
+@pytest.mark.parametrize("diamond", [False, True])
+def test_conflicting_base_counts_require_local_resolution(backend, reverse, local_axes, diamond):
     base, _ = backend
 
-    class Left(base):
+    class Root(base):
         protected_axes: ClassVar[dict[str, int]] = {"values": 1}
 
-    class Right(base):
+    class Left(Root):
+        pass
+
+    class Right(Root if diamond else base):
         protected_axes: ClassVar[dict[str, int]] = {"values": 2}
 
-    with pytest.raises(TypeError, match="conflicts with an inherited axis count"):
-        type("Child", (Left, Right), {})
+    bases = (Right, Left) if reverse else (Left, Right)
+    declarations = {} if local_axes is None else {"protected_axes": local_axes}
+    if local_axes is None or "values" not in local_axes:
+        with pytest.raises(TypeError, match=r"conflicts with an inherited axis count.*Redeclare 'values' locally"):
+            type("Child", bases, declarations)
+    else:
+        child = type("Child", bases, declarations)
+        assert child.protected_axes == local_axes
+        assert Left.protected_axes == {"values": 1}
+        assert Right.protected_axes == {"values": 2}
 
 
-@pytest.mark.parametrize("axes", [None, [], {"new": -1}, {"new": 1.5}, {"": 0}])
+@pytest.mark.parametrize("axes", [None, [], {"new": -1}, {"new": 1.5}, {"values": -1}, {"values": 1.5}, {"": 0}])
 def test_invalid_local_declarations_are_rejected_with_valid_bases(backend, axes):
     base, _ = backend
 

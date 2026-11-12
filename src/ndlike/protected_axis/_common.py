@@ -112,10 +112,16 @@ def require_effective_fields(axes: Mapping[str, int]) -> None:
 
 
 def inherit_protected_axes(cls: type) -> dict[str, int]:
-    """Merge base layouts, then place local declarations in their declared order."""
+    """Merge base layouts, requiring local declarations to resolve count conflicts.
+
+    Local declarations may override inherited counts and retain their own order.
+    """
     axes: dict[str, int] = {}
     # Bases already include their ancestors, including abstract classes.
     local_axes = vars(cls).get("protected_axes", {})
+    if not isinstance(local_axes, dict):
+        msg = f"{cls.__name__} must define protected_axes as a non-empty dict[str, int]."
+        raise TypeError(msg)
     declarations = [getattr(base, "protected_axes", {}) for base in cls.__bases__]
     declarations.append(local_axes)
     for declared_axes in declarations:
@@ -129,10 +135,10 @@ def inherit_protected_axes(cls: type) -> dict[str, int]:
             if not isinstance(value, int) or value < 0:
                 msg = f"{cls.__name__}.protected_axes[{name}] must be a non-negative integer."
                 raise TypeError(msg)
-            if name in axes and axes[name] != value:
+            if name in axes and axes[name] != value and name not in local_axes:
                 msg = (
                     f"{cls.__name__}.protected_axes[{name!r}] conflicts with an inherited "
-                    f"axis count: {axes[name]} != {value}."
+                    f"axis count: {axes[name]} != {value}. Redeclare {name!r} locally to resolve the conflict."
                 )
                 raise TypeError(msg)
             axes[name] = value

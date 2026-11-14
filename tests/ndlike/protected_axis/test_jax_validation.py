@@ -29,7 +29,7 @@ def test_jax_subclass_requires_non_empty_protected_axes() -> None:
     with pytest.raises(TypeError, match="must define protected_axes"):
 
         @dataclass(frozen=True, slots=True)
-        class _Empty(JaxAxisProtected[Any]):
+        class _Empty(JaxAxisProtected):
             array: jax.Array
             protected_axes: ClassVar[dict[str, int]] = {}
 
@@ -39,7 +39,7 @@ def test_jax_subclass_rejects_non_dict_protected_axes() -> None:
     with pytest.raises(TypeError, match="must define protected_axes"):
 
         @dataclass(frozen=True, slots=True)
-        class _NotDict(JaxAxisProtected[Any]):
+        class _NotDict(JaxAxisProtected):
             array: jax.Array
             protected_axes: ClassVar[Any] = ["array"]
 
@@ -49,7 +49,7 @@ def test_jax_subclass_rejects_empty_string_field_name() -> None:
     with pytest.raises(TypeError, match="non-empty string keys"):
 
         @dataclass(frozen=True, slots=True)
-        class _BadName(JaxAxisProtected[Any]):
+        class _BadName(JaxAxisProtected):
             array: jax.Array
             protected_axes: ClassVar[dict[str, int]] = {"": 1}
 
@@ -59,7 +59,7 @@ def test_jax_subclass_rejects_negative_axis_count() -> None:
     with pytest.raises(TypeError, match="must be a non-negative integer"):
 
         @dataclass(frozen=True, slots=True)
-        class _Negative(JaxAxisProtected[Any]):
+        class _Negative(JaxAxisProtected):
             array: jax.Array
             protected_axes: ClassVar[dict[str, int]] = {"array": -1}
 
@@ -69,7 +69,7 @@ def test_jax_subclass_rejects_non_int_axis_count() -> None:
     with pytest.raises(TypeError, match="must be a non-negative integer"):
 
         @dataclass(frozen=True, slots=True)
-        class _Fractional(JaxAxisProtected[Any]):
+        class _Fractional(JaxAxisProtected):
             array: jax.Array
             protected_axes: ClassVar[Any] = {"array": 1.5}
 
@@ -77,7 +77,7 @@ def test_jax_subclass_rejects_non_int_axis_count() -> None:
 def test_jax_subclass_accepts_unannotated_protected_field() -> None:
     """Protected fields may be provided by the instance without class annotations."""
 
-    class RuntimeField(JaxAxisProtected[jax.Array]):
+    class RuntimeField(JaxAxisProtected):
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
         def __init__(self, array: jax.Array) -> None:
@@ -94,7 +94,7 @@ def test_jax_subclass_accepts_inherited_protected_field(slots: bool) -> None:
     """Inherited dataclass fields support indexing without redeclaration."""
 
     @dataclass(frozen=True, slots=slots)
-    class Parent(JaxAxisProtected[jax.Array]):
+    class Parent(JaxAxisProtected):
         array: jax.Array
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
@@ -113,7 +113,7 @@ def test_jax_subclass_rejects_non_set_permitted_functions() -> None:
     with pytest.raises(TypeError, match="permitted_functions must be a set"):
 
         @dataclass(frozen=True, slots=True)
-        class _BadFuncs(JaxAxisProtected[Any]):
+        class _BadFuncs(JaxAxisProtected):
             array: jax.Array
             protected_axes: ClassVar[dict[str, int]] = {"array": 1}
             permitted_functions: ClassVar[Any] = [jnp.mean]
@@ -124,7 +124,7 @@ def test_jax_subclass_rejects_non_callable_in_permitted_functions() -> None:
     with pytest.raises(TypeError, match="permitted_functions must be a set"):
 
         @dataclass(frozen=True, slots=True)
-        class _NonCallable(JaxAxisProtected[Any]):
+        class _NonCallable(JaxAxisProtected):
             array: jax.Array
             protected_axes: ClassVar[dict[str, int]] = {"array": 1}
             permitted_functions: ClassVar[set[Any]] = {"not-callable"}
@@ -135,7 +135,7 @@ def test_jax_subclass_rejects_invalid_permitted_at_methods(methods):
     with pytest.raises(TypeError, match="permitted_at_methods must be a set of supported"):
 
         @dataclass(frozen=True)
-        class Invalid(JaxAxisProtected[jax.Array]):
+        class Invalid(JaxAxisProtected):
             array: jax.Array
             protected_axes: ClassVar[dict[str, int]] = {"array": 1}
             permitted_at_methods: ClassVar[Any] = methods
@@ -145,7 +145,7 @@ def test_jax_subclass_copies_indexed_update_permissions():
     methods: set[JaxAtMethod] = {"set", "add"}
 
     @dataclass(frozen=True)
-    class Parent(JaxAxisProtected[jax.Array]):
+    class Parent(JaxAxisProtected):
         array: jax.Array
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
         permitted_at_methods: ClassVar[set[JaxAtMethod]] = methods

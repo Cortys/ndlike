@@ -97,7 +97,7 @@ def _broadcast_batch(
         return value
     return _apply_structural_op(
         value,
-        lambda field_value: jax_broadcast_to(cast("Any", field_value), target),
+        lambda field_value: jax_broadcast_to(field_value, target),
         lambda field_value: np.broadcast_to(field_value, target),
     )
 
@@ -136,7 +136,7 @@ def jax_axis_protected_internals(
                 if value_ndim(value) == axes
                 else _apply_structural_op(
                     value,
-                    lambda field_value, target=suffix: jax_reshape(cast("Any", field_value), target),
+                    lambda field_value, target=suffix: jax_reshape(field_value, target),
                     lambda field_value, target=suffix: np.reshape(field_value, target),
                 )
             )
@@ -180,10 +180,10 @@ def _expand_average_weights_for_protected_axes(
     if weights.ndim != batch_ndim:
         return weights
 
-    expanded = cast("JaxProtectedValue", cast("Any", weights).reshape((*weights.shape, *((1,) * axes_count))))
+    expanded = weights.reshape((*weights.shape, *((1,) * axes_count)))
     return _apply_structural_op(
         expanded,
-        lambda w: jnp.broadcast_to(cast("Any", w), value_shape(value)),
+        lambda w: jnp.broadcast_to(w, value_shape(value)),
         lambda w: np.broadcast_to(w, value_shape(value)),
     )
 
@@ -287,7 +287,7 @@ def protected_batch_reduction_function(
             msg = f"Reduction modified protected trailing axes for field {name!r}."
             raise ValueError(msg)
 
-        results[name] = cast("JaxProtectedValue", result)
+        results[name] = result
 
     return internals.create(results)
 
@@ -343,7 +343,7 @@ def protected_matrix_transpose_function(
         full_axes = _map_batch_axes(value, axes_count, tuple(batch_axes))
         return _apply_structural_op(
             value,
-            lambda field_value: jax_transpose(cast("Any", field_value), axes=full_axes),
+            lambda field_value: jax_transpose(field_value, axes=full_axes),
             lambda field_value: np.transpose(field_value, axes=full_axes),
         )
 
@@ -605,7 +605,7 @@ def protected_concatenate_function(
             msg = f"Concatenation modified protected trailing axes for field {name!r}."
             raise ValueError(msg)
 
-        results[name] = cast("JaxProtectedValue", result)
+        results[name] = result
 
     return template.create(results)
 

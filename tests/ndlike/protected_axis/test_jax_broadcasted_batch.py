@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 from functools import partial
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar
 from unittest.mock import Mock
 
 import numpy as np
@@ -19,6 +19,7 @@ import jax
 import jax.numpy as jnp
 
 from ndlike import jax_functions as jf
+from ndlike.jax_like import JaxLike
 from ndlike.protected_axis import jax as protected_jax
 from ndlike.protected_axis._common import extract_axis_protected_internals, validate_batch_sync
 from ndlike.protected_axis.jax import JaxAtMethod, JaxAxisProtected
@@ -38,7 +39,7 @@ _PERMITTED = {
 
 
 @dataclass(frozen=True)
-class _Shared(JaxAxisProtected[Any]):
+class _Shared(JaxAxisProtected):
     # Deliberately put the broadcastable field first in the layout.
     shared: Any
     values: Any
@@ -49,7 +50,7 @@ class _Shared(JaxAxisProtected[Any]):
 
 
 @dataclass(frozen=True)
-class _SharedScalar(JaxAxisProtected[Any]):
+class _SharedScalar(JaxAxisProtected):
     shared: Any
     values: Any
     protected_axes: ClassVar[dict[str, int]] = {"shared": 0, "values": 1}
@@ -59,7 +60,7 @@ class _SharedScalar(JaxAxisProtected[Any]):
 
 
 @dataclass(frozen=True)
-class _SharedMatrix(JaxAxisProtected[Any]):
+class _SharedMatrix(JaxAxisProtected):
     shared: Any
     values: Any
     protected_axes: ClassVar[dict[str, int]] = {"shared": 2, "values": 1}
@@ -183,7 +184,7 @@ class TestLayoutAndShapeInference:
         assert x.protected_value() is x.shared
         assert set(x.protected_values()) == {"shared", "values"}
         assert [field.name for field in fields(x)] == ["shared", "values", "label"]
-        internals = extract_axis_protected_internals(cast("Any", x))
+        internals = extract_axis_protected_internals(x)
         assert internals is not None
         assert internals.batch_shape == (2, 3)
         assert internals.values["shared"] is x.shared
@@ -211,7 +212,7 @@ class TestLayoutAndShapeInference:
         x = WithWitness(jnp.array(2.0), jnp.arange(4.0), witness=jnp.ones((2, 3)))
         assert x.shape == (2, 3)
         assert x.primary_protected_name == "shared"
-        internals = extract_axis_protected_internals(cast("Any", x))
+        internals = extract_axis_protected_internals(x)
         assert internals is not None
         assert internals.batch_shape == (2, 3)
         reshaped = x.reshape(6)
@@ -276,7 +277,7 @@ class TestLayoutAndShapeInference:
 
     def test_unmarked_fields_still_require_identical_shapes(self):
         @dataclass(frozen=True)
-        class Pair(JaxAxisProtected[Any]):
+        class Pair(JaxAxisProtected):
             shared: Any
             first: Any
             second: Any
@@ -303,7 +304,7 @@ class TestIndexing:
     @pytest.mark.parametrize("index", [(slice(None), 1), (slice(None), np.array([2, 0]))])
     def test_full_fields_skip_broadcast_index_helpers(self, marked, index, index_helpers):
         @dataclass(frozen=True)
-        class Pair(JaxAxisProtected[Any]):
+        class Pair(JaxAxisProtected[JaxLike[Any], JaxLike[Any], JaxLike[Any], tuple[jax.Array, jax.Array]]):
             shared: Any
             values: Any
             protected_axes: ClassVar[dict[str, int]] = {"shared": 1, "values": 1}
@@ -322,7 +323,7 @@ class TestIndexing:
     @pytest.mark.parametrize(("index", "basic"), [((slice(None), 1), True), ((slice(None), np.array([2, 0])), False)])
     def test_gather_classifies_once_for_multiple_compact_fields(self, index, basic, index_helpers):
         @dataclass(frozen=True)
-        class MultipleShared(JaxAxisProtected[Any]):
+        class MultipleShared(JaxAxisProtected):
             first: Any
             second: Any
             full: Any
@@ -705,7 +706,7 @@ class TestSidecarsAndNestedFields:
     @pytest.mark.parametrize("copy", [None, False, True])
     def test_reshape_nested_single_entry_numpy_sidecar(self, compact, order, copy):
         @dataclass(frozen=True)
-        class Mixed(JaxAxisProtected[Any]):
+        class Mixed(JaxAxisProtected):
             values: Any
             label: Any
             protected_axes: ClassVar[dict[str, int]] = {"values": 1, "label": 0}

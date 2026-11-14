@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import operator
-from typing import ClassVar, Never
+from typing import Any, ClassVar, Never
 
 import numpy as np
 import pytest
@@ -15,6 +15,7 @@ import jax
 import jax.numpy as jnp
 
 from ndlike import jax_functions as jf
+from ndlike.jax_like import JaxLike
 from ndlike.protected_axis.jax import JaxAxisProtected
 
 _BINARY: list[tuple[Callable, Callable, Callable]] = [
@@ -54,20 +55,20 @@ _PERMITTED: set[Callable] = {wrapper for _, wrapper, _ in [*_BINARY, *_UNARY, *_
 
 
 @dataclass(frozen=True)
-class Numeric(JaxAxisProtected[jax.Array]):
+class Numeric(JaxAxisProtected[JaxLike[Any], Any]):
     array: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
     permitted_functions: ClassVar[set[Callable]] = _PERMITTED
 
 
 @dataclass(frozen=True)
-class Denied(JaxAxisProtected[jax.Array]):
+class Denied(JaxAxisProtected):
     array: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
 
 @dataclass(frozen=True)
-class Pair(JaxAxisProtected[jax.Array]):
+class Pair(JaxAxisProtected[JaxLike[Any], Any]):
     first: jax.Array
     second: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"first": 1, "second": 2}
@@ -140,6 +141,7 @@ def test_comparisons_return_batch_masks(op, wrapper, backend):
 def test_multifield_operations_and_comparisons():
     x = Pair(jnp.array([[1, 2], [1, 2]]), jnp.array([[[3, 4]], [[3, 4]]]))
     shifted = x + 2
+    assert isinstance(shifted, Pair)
     np.testing.assert_array_equal(shifted.first, x.first + 2)
     np.testing.assert_array_equal(shifted.second, x.second + 2)
     y = Pair(x.first, x.second.at[1, 0, 1].set(9))
@@ -151,6 +153,7 @@ def test_batch_broadcasting_preserves_protected_dimensions():
     x = Numeric(jnp.ones((2, 1, 3)))
     y = Numeric(jnp.arange(12).reshape(4, 3))
     result = x + y
+    assert isinstance(result, Numeric)
     assert result.shape == (2, 4)
     assert result.protected_shape == (3,)
     np.testing.assert_array_equal(result.array, x.array + y.array)
@@ -188,7 +191,7 @@ def test_both_operands_must_permit_operation():
 @pytest.mark.parametrize("dtype", [float, object])
 def test_numpy_sidecars_are_rejected(dtype):
     @dataclass(frozen=True)
-    class Sidecar(JaxAxisProtected[jax.Array]):
+    class Sidecar(JaxAxisProtected[JaxLike[Any], Any]):
         array: jax.Array
         sidecar: np.ndarray
         protected_axes: ClassVar[dict[str, int]] = {"array": 1, "sidecar": 0}
@@ -299,6 +302,7 @@ def test_matmul_operates_on_visible_dimensions(left_shape, right_shape):
     left = Numeric(jnp.arange(np.prod(left_shape) * 2).reshape((*left_shape, 2)))
     right = Numeric(jnp.arange(np.prod(right_shape) * 2).reshape((*right_shape, 2)))
     result = left @ right
+    assert isinstance(result, Numeric)
     expected = jnp.stack([left.array[..., i] @ right.array[..., i] for i in range(2)], axis=-1)
     np.testing.assert_array_equal(result.array, expected)
     assert result.protected_shape == (2,)
@@ -308,6 +312,7 @@ def test_matmul_raw_operands_and_multiple_protected_axes():
     x = Pair(jnp.ones((2, 3, 4)), jnp.ones((2, 3, 4, 5)))
     right = jnp.ones((3, 6))
     result = x @ right
+    assert isinstance(result, Pair)
     assert result.first.shape == (2, 6, 4)
     assert result.second.shape == (2, 6, 4, 5)
     np.testing.assert_array_equal(result.second, jnp.full((2, 6, 4, 5), 3))
@@ -323,6 +328,7 @@ def test_augmented_assignment_rebinds_without_mutating():
     x = Numeric(jnp.ones((2, 3)))
     original = x
     x += 2
+    assert isinstance(x, Numeric)
     assert x is not original
     np.testing.assert_array_equal(original.array, jnp.ones((2, 3)))
     np.testing.assert_array_equal(x.array, jnp.full((2, 3), 3))
@@ -332,7 +338,7 @@ def test_augmented_assignment_rebinds_without_mutating():
 
 def test_result_hook_receives_context_and_cannot_change_protected_shape():
     @dataclass(frozen=True)
-    class BrokenResult(JaxAxisProtected[jax.Array]):
+    class BrokenResult(JaxAxisProtected[JaxLike[Any], Any]):
         array: jax.Array
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
         permitted_functions: ClassVar[set[Callable]] = {jf.jax_subtract}
@@ -383,6 +389,7 @@ def test_operation_context_reaches_reconstruction():
             return Recorded(values["array"])
 
     result = Recorded(jnp.ones((2, 3))) * 3
+    assert isinstance(result, Recorded)
     np.testing.assert_array_equal(result.array, jnp.full((2, 3), 3))
 
 
@@ -392,7 +399,7 @@ def test_numpy_coercion_is_independent_of_jax_operation_permissions():
     assert isinstance(result, np.ndarray)
     np.testing.assert_array_equal(result, np.asarray(x) + 1)
     with pytest.raises(TypeError, match="no implementation found"):
-        jf.jax_add(x, 1)
+        jf.jax_add(x, 1)  # ty: ignore[no-matching-overload]
 
 
 @pytest.mark.parametrize(("op", "wrapper", "backend"), [*_BINARY, *_COMPARISONS])

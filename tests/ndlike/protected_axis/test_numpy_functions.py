@@ -12,7 +12,7 @@ from ndlike.protected_axis.numpy import NumpyAxisProtected
 
 
 @dataclass(frozen=True, slots=True)
-class SingleArrayProtected(NumpyAxisProtected[np.ndarray]):
+class SingleArrayProtected(NumpyAxisProtected):
     """Single-field representation with a 1D protected trailing axis."""
 
     array: np.ndarray
@@ -25,7 +25,7 @@ class SingleArrayProtected(NumpyAxisProtected[np.ndarray]):
 
 
 @dataclass(frozen=True, slots=True)
-class PairArrayProtected(NumpyAxisProtected[np.ndarray]):
+class PairArrayProtected(NumpyAxisProtected["PairArrayProtected"]):
     """Two-field representation with no protected trailing axes."""
 
     first: np.ndarray
@@ -34,7 +34,7 @@ class PairArrayProtected(NumpyAxisProtected[np.ndarray]):
 
 
 @dataclass(frozen=True, slots=True)
-class TwoFieldArrayProtected(NumpyAxisProtected[np.ndarray]):
+class TwoFieldArrayProtected(NumpyAxisProtected):
     """Two-field representation with a 1D protected trailing axis each."""
 
     left: np.ndarray
@@ -542,14 +542,14 @@ def test_setitem_rejects_tuple_with_wrong_length() -> None:
     """Assigning a tuple with the wrong number of fields raises TypeError."""
     x = PairArrayProtected(np.zeros((2, 2)), np.ones((2, 2)))
     with pytest.raises(TypeError, match="Expected tuple"):
-        x[0] = (np.zeros(2),)
+        x[0] = (np.zeros(2),)  # ty: ignore[invalid-assignment]
 
 
 def test_setitem_rejects_scalar_for_multi_field() -> None:
     """Single value assignment is rejected for multi-field protected objects."""
     x = PairArrayProtected(np.zeros((2, 2)), np.ones((2, 2)))
     with pytest.raises(TypeError, match="multi-field protected object"):
-        x[0] = np.zeros(2)
+        x[0] = np.zeros(2)  # ty: ignore[invalid-assignment]
 
 
 def test_setitem_rejects_value_with_wrong_protected_shape() -> None:

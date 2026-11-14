@@ -12,7 +12,7 @@ from ndlike.protected_axis.numpy import NumpyAxisProtected
 
 
 @dataclass(frozen=True, slots=True)
-class _SingleProtected(NumpyAxisProtected[np.ndarray]):
+class _SingleProtected(NumpyAxisProtected):
     """Single-field representation with a 1D protected trailing axis."""
 
     array: np.ndarray
@@ -27,7 +27,7 @@ class _SingleProtected(NumpyAxisProtected[np.ndarray]):
 
 
 @dataclass(frozen=True, slots=True)
-class _ScalarProtected(NumpyAxisProtected[np.ndarray]):
+class _ScalarProtected(NumpyAxisProtected):
     """Single-field representation with no protected trailing axis."""
 
     array: np.ndarray
@@ -41,7 +41,7 @@ class _ScalarProtected(NumpyAxisProtected[np.ndarray]):
 
 
 @dataclass(frozen=True, slots=True)
-class _TwoFieldProtected(NumpyAxisProtected[np.ndarray]):
+class _TwoFieldProtected(NumpyAxisProtected):
     """Two-field representation with one protected trailing axis."""
 
     left: np.ndarray
@@ -72,7 +72,7 @@ def test_protected_values_with_permitted_func_returns_dict() -> None:
     """``protected_values(np.mean)`` returns the dict for permitted reductions."""
 
     @dataclass(frozen=True, slots=True)
-    class _Reducer(NumpyAxisProtected[np.ndarray]):
+    class _Reducer(NumpyAxisProtected):
         array: np.ndarray
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
         permitted_functions: ClassVar[set[Any]] = {np.mean}
@@ -437,3 +437,120 @@ def test_iteration_yields_indexed_objects() -> None:
     for i, item in enumerate(items):
         assert isinstance(item, _SingleProtected)
         np.testing.assert_array_equal(item.array, x.array[i])
+
+
+def test_augmented_assignment_preserves_wrapper_and_storage() -> None:
+    x = _SingleProtected(np.ones((2, 3)))
+    original, storage = x, x.array
+    other = _SingleProtected(np.full((2, 3), 2.0))
+
+    x += other
+    x *= other
+
+    assert x is original
+    assert x.array is storage
+    np.testing.assert_array_equal(storage, np.full((2, 3), 6.0))
+    np.testing.assert_array_equal(other.array, np.full((2, 3), 2.0))
+
+
+@pytest.mark.parametrize("reflected", [False, True])
+def test_ufunc_rejects_broadcasting_between_protected_shapes(reflected):
+    left = _SingleProtected(np.ones((2, 1)))
+    right = _SingleProtected(np.ones((2, 3)))
+    operands = (right, left) if reflected else (left, right)
+    with pytest.raises(ValueError, match="identical protected trailing shapes"):
+        np.add(*operands)
+
+
+@pytest.mark.parametrize("protected", [False, True])
+@pytest.mark.parametrize("shape", [(2, 4), (5, 2, 1)])
+def test_ufunc_output_cannot_expand_protected_or_batch_dimensions(protected, shape):
+    x = _SingleProtected(np.ones((2, 1)))
+    storage = np.zeros(shape)
+    out: Any = _SingleProtected(storage) if protected else storage
+    with pytest.raises(ValueError, match=r"protected trailing|result shape"):
+        np.add(x, 2, out=out)
+    np.testing.assert_array_equal(storage, np.zeros(shape))
+
+
+def test_ufunc_validates_later_output_fields_before_writing():
+    x = _TwoFieldProtected(np.ones((2, 3)), np.ones((2, 1)))
+    out: Any = _TwoFieldProtected(np.zeros((2, 3)), np.zeros((2, 4)))
+    with pytest.raises(ValueError, match="identical protected trailing shapes"):
+        np.add(x, 2, out=out)
+    np.testing.assert_array_equal(out.left, np.zeros((2, 3)))
+    np.testing.assert_array_equal(out.right, np.zeros((2, 4)))
+
+
+def test_ufunc_output_does_not_hide_inconsistent_result_batch_shapes():
+    @dataclass(frozen=True)
+    class Mixed(NumpyAxisProtected):
+        first: np.ndarray
+        second: np.ndarray
+        protected_axes: ClassVar[dict[str, int]] = {"first": 1, "second": 2}
+        permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {np.add: ["__call__"]}
+
+    x = Mixed(np.ones((1, 3)), np.ones((1, 2, 3)))
+    out: Any = Mixed(np.zeros((2, 3)), np.zeros((2, 2, 3)))
+    with pytest.raises(ValueError, match="inconsistent batch-shapes"):
+        np.add(x, np.ones((2, 3)), out=out)
+    np.testing.assert_array_equal(out.first, np.zeros((2, 3)))
+
+
+def test_multi_output_ufunc_validates_every_destination_before_writing():
+    x = _SingleProtected(np.full((2, 3), 1.5))
+    first = np.zeros((2, 3))
+    second = np.zeros((4, 2, 3))
+    with pytest.raises(ValueError, match="result shape"):
+        np.modf(x, out=(first, second))
+    np.testing.assert_array_equal(first, np.zeros((2, 3)))
+    np.testing.assert_array_equal(second, np.zeros((4, 2, 3)))
+
+
+def test_ufunc_output_preserves_mask_and_accepts_input_broadcasting():
+    x = _SingleProtected(np.ones((1, 3)))
+    y = _SingleProtected(np.full((2, 3), 2.0))
+    out: Any = _SingleProtected(np.full((2, 3), -1.0))
+    where = np.array([[True], [False]])
+    assert np.add(x, y, out=out, where=where) is out
+    np.testing.assert_array_equal(out.array, [[3, 3, 3], [-1, -1, -1]])
+    # A mask can introduce visible broadcast dimensions too.
+    assert np.add(x, 2, out=out, where=where) is out
+    np.testing.assert_array_equal(out.array, [[3, 3, 3], [-1, -1, -1]])
+
+
+@pytest.mark.parametrize("method", ["reduce", "accumulate", "reduceat"])
+@pytest.mark.parametrize("keepdims", [False, True])
+def test_ufunc_reduction_outputs_match_result_shapes(method, keepdims):
+    x = _SingleProtected(np.arange(24.0).reshape(2, 3, 4))
+    operation = getattr(np.add, method)
+    args = ([0, 1],) if method == "reduceat" else ()
+    kwargs = {"axis": -1}
+    if method == "reduce":
+        kwargs["keepdims"] = keepdims
+    expected = operation(x.array, *args, **{**kwargs, "axis": 1})
+    out: Any = _SingleProtected(np.zeros_like(expected))
+    assert operation(x, *args, out=out, **kwargs) is out
+    np.testing.assert_array_equal(out.array, expected)
+    bad = np.zeros((5, *expected.shape))
+    with pytest.raises(ValueError, match="result shape"):
+        operation(x, *args, out=bad, **kwargs)
+    np.testing.assert_array_equal(bad, np.zeros_like(bad))
+
+
+def test_generalized_ufunc_output_uses_native_core_axis_shape_rules():
+    @dataclass(frozen=True)
+    class Vectors(NumpyAxisProtected):
+        array: np.ndarray
+        protected_axes: ClassVar[dict[str, int]] = {"array": 1}
+        permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {np.vecdot: ["__call__"]}
+
+    x = Vectors(np.ones((2, 3)))
+    out = np.zeros(3)
+    operation: Any = np.vecdot  # NumPy's gufunc stubs omit the axis keyword.
+    assert operation(x, x, axis=0, out=out) is out
+    np.testing.assert_array_equal(out, np.full(3, 2.0))
+    bad = np.zeros(2)
+    with pytest.raises(ValueError, match="modified protected trailing axes"):
+        operation(x, x, out=bad)
+    np.testing.assert_array_equal(bad, np.zeros(2))

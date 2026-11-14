@@ -23,7 +23,7 @@ class _Metadata:
 
 
 @dataclass(frozen=True, slots=True)
-class _Pair(JaxAxisProtected[jax.Array]):
+class _Pair(JaxAxisProtected):
     array: jax.Array
     second: jax.Array
     metadata: Any = _Metadata()
@@ -32,7 +32,7 @@ class _Pair(JaxAxisProtected[jax.Array]):
 
 
 @dataclass(frozen=True, slots=True)
-class _Sidecar(JaxAxisProtected[jax.Array]):
+class _Sidecar(JaxAxisProtected):
     array: jax.Array
     labels: np.ndarray | jax.Array
     metadata: Any = None

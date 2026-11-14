@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from inspect import isabstract
-from typing import TYPE_CHECKING, Any, ClassVar, Never, assert_type, get_origin
-from typing_extensions import get_protocol_members
+from typing import TYPE_CHECKING, Any, ClassVar, Never, assert_type, get_origin, get_protocol_members
 
 import numpy as np
 import pytest
@@ -13,20 +12,27 @@ import pytest
 pytest.importorskip("torch")
 import torch
 
+from ndlike.array_like import WeakArrayLike
 from ndlike.protected_axis.torch import TorchAxisProtected
 from ndlike.torch_like import TorchLike, TorchLikeConvertible, TorchLikeImplementation, to_torch_like
 
 
 @dataclass(frozen=True, slots=True)
-class _Tensor(TorchAxisProtected[torch.Tensor]):
+class _Tensor(TorchAxisProtected):
     tensor: torch.Tensor
     protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
 
 
 if TYPE_CHECKING:
 
-    def _check_dispatched_method_types(protocol: TorchLike[Any], implementation: _Tensor) -> None:
-        type Result = TorchLike[Any] | torch.Tensor
+    def _check_default_native_tensor_protocol(tensor: torch.Tensor) -> WeakArrayLike[Any]:
+        return tensor
+
+    def _check_native_tensor_protocol(tensor: torch.Tensor) -> WeakArrayLike[torch.Tensor]:
+        return tensor
+
+    def _check_dispatched_method_types(protocol: TorchLike, implementation: _Tensor) -> None:
+        type Result = TorchLike[Any]
 
         assert_type(protocol.T, Result)
         assert_type(protocol.mT, Result)
@@ -45,6 +51,11 @@ if TYPE_CHECKING:
         assert_type(implementation.detach(), _Tensor)
         assert_type(implementation.cpu(), _Tensor)
         assert_type(implementation.to_device("cpu"), _Tensor)
+
+
+@pytest.mark.parametrize("shape", [(), (3,), (2, 3)])
+def test_native_tensor_satisfies_core_protocol(shape: tuple[int, ...]) -> None:
+    assert isinstance(torch.zeros(shape), WeakArrayLike)
 
 
 @pytest.mark.parametrize("native", [False, True])

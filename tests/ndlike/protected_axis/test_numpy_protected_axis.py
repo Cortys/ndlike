@@ -12,14 +12,14 @@ from ndlike.protected_axis.numpy import NumpyAxisProtected
 
 
 @dataclass(frozen=True, slots=True)
-class SingleArray(NumpyAxisProtected[np.ndarray]):
+class SingleArray(NumpyAxisProtected):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
     permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {np.add: ["__call__"]}
 
 
 @dataclass(frozen=True, slots=True)
-class ReductionArray(NumpyAxisProtected[np.ndarray]):
+class ReductionArray(NumpyAxisProtected):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
     permitted_functions: ClassVar[set[Any]] = {np.mean, np.sum}
@@ -27,21 +27,21 @@ class ReductionArray(NumpyAxisProtected[np.ndarray]):
 
 
 @dataclass(frozen=True, slots=True)
-class PairArray(NumpyAxisProtected[np.ndarray]):
+class PairArray(NumpyAxisProtected["PairArray", "PairArray", "PairArray", tuple[np.ndarray, np.ndarray]]):
     first: np.ndarray
     second: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"first": 0, "second": 0}
 
 
 @dataclass(frozen=True, slots=True)
-class InnerPair(NumpyAxisProtected[np.ndarray]):
+class InnerPair(NumpyAxisProtected):
     left: np.ndarray
     right: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"left": 1, "right": 1}
 
 
 @dataclass(frozen=True, slots=True)
-class OuterNested(NumpyAxisProtected[Any]):
+class OuterNested(NumpyAxisProtected):
     inner: InnerPair
     aux: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"inner": 1, "aux": 1}

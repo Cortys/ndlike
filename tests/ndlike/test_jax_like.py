@@ -5,8 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from inspect import isabstract
 import operator
-from typing import Any, ClassVar, Never, Self, assert_type
-from typing_extensions import get_protocol_members
+from typing import TYPE_CHECKING, Any, ClassVar, Never, Self, assert_type, get_protocol_members
 
 import numpy as np
 import pytest
@@ -16,6 +15,7 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
+from ndlike.array_like import ArrayLike, WeakArrayLike
 from ndlike.jax_functions import (
     handle_jax_function,
     has_jax_function,
@@ -40,6 +40,21 @@ from ndlike.jax_like import (
 )
 from ndlike.protected_axis.numpy import NumpyAxisProtected
 
+if TYPE_CHECKING:
+
+    def _check_default_native_array_protocols(array: jax.Array) -> tuple[ArrayLike[Any], WeakArrayLike[Any]]:
+        return array, array
+
+    def _check_native_array_protocols(array: jax.Array) -> tuple[ArrayLike[jax.Array], WeakArrayLike[jax.Array]]:
+        return array, array
+
+
+@pytest.mark.parametrize("shape", [(), (3,), (2, 3)])
+def test_native_array_satisfies_core_protocols(shape: tuple[int, ...]) -> None:
+    data = jnp.zeros(shape)
+    assert isinstance(data, WeakArrayLike)
+    assert isinstance(data, ArrayLike)
+
 
 def _unwrap(value: Any) -> Any:  # noqa: ANN401
     if isinstance(value, _Wrapper):
@@ -50,7 +65,7 @@ def _unwrap(value: Any) -> Any:  # noqa: ANN401
 
 
 @dataclass(frozen=True)
-class _Wrapper(JaxLikeImplementation[jax.Array]):
+class _Wrapper(JaxLikeImplementation[JaxLike[Any], Any, JaxLike[Any], jax.Array]):
     """Minimal concrete subclass that forwards every call to the wrapped array."""
 
     array: jax.Array
@@ -115,7 +130,7 @@ class _Wrapper(JaxLikeImplementation[jax.Array]):
 
 
 @dataclass(frozen=True)
-class _NumpyArray(NumpyAxisProtected[np.ndarray]):
+class _NumpyArray(NumpyAxisProtected):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 0}
     permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {
@@ -337,12 +352,12 @@ class TestWrappers:
                 return NotImplemented
 
         original = _ChangingWrapper(jnp.arange(3.0))
-        changed = assert_type(jax_copy(original), jax.Array | JaxLike[Any])
+        changed = assert_type(jax_copy(original), JaxLike[Any])
         assert isinstance(changed, _Wrapper)
         assert not isinstance(changed, _ChangingWrapper)
         np.testing.assert_array_equal(changed.array, original.array)
 
-        unwrapped = assert_type(jax_sum(original), jax.Array | JaxLike[Any])
+        unwrapped = assert_type(jax_sum(original), JaxLike[Any])
         assert isinstance(unwrapped, jax.Array)
         assert float(unwrapped) == pytest.approx(3.0)
 
@@ -357,7 +372,7 @@ class TestWrappers:
                 result = func(*(_unwrap(arg) for arg in args), **({} if kwargs is None else kwargs))
                 return result if native else _Wrapper(result)
 
-        type Result = JaxLike[Any] | jax.Array
+        type Result = JaxLike[Any]
 
         original = _ChangingWrapper(jnp.arange(6.0).reshape(2, 3))
         results = (
@@ -693,7 +708,7 @@ class TestPytreeRegistration:
 
     def test_array_metadata_is_rejected_even_with_an_identity_hash(self):
         class _HashableArray(np.ndarray):
-            __hash__ = object.__hash__  # ty:ignore[invalid-assignment]
+            __hash__ = object.__hash__
 
         @dataclass(frozen=True)
         class _WithMetadata(_Wrapper):
@@ -969,7 +984,7 @@ class TestGenericOperators:
         np.testing.assert_array_equal(result.array, expected)
         np.testing.assert_array_equal(x.array, [1, 2, 3])
         with pytest.raises(TypeError):
-            jax_add(x, other)  # ty: ignore[invalid-argument-type]
+            jax_add(x, other)
 
     @pytest.mark.parametrize(
         "op", [operator.add, operator.sub, operator.mul, operator.truediv, operator.pow, divmod, operator.matmul]

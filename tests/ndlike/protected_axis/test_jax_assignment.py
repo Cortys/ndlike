@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 import pytest
@@ -13,17 +13,18 @@ import jax
 import jax.numpy as jnp
 
 from ndlike import jax_functions as jf
+from ndlike.jax_like import JaxLike
 from ndlike.protected_axis.jax import JaxAtMethod, JaxAxisProtected
 
 
 @dataclass(frozen=True)
-class _Array(JaxAxisProtected[jax.Array]):
+class _Array(JaxAxisProtected[JaxLike[Any], Any, JaxLike[Any], jax.Array | float]):
     array: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
 
 @dataclass(frozen=True)
-class _TemperaturePair(JaxAxisProtected[jax.Array]):
+class _TemperaturePair(JaxAxisProtected):
     left: jax.Array
     right: jax.Array
     unit: str = "K"
@@ -65,7 +66,9 @@ def test_permissions_are_independent_of_ordinary_arithmetic():
         permitted_at_methods: ClassVar[set[JaxAtMethod]] = {"add"}
 
     ordinary = Ordinary(jnp.ones((3, 2)))
-    np.testing.assert_array_equal((ordinary + 2).array, 3)
+    shifted = ordinary + 2
+    assert isinstance(shifted, Ordinary)
+    np.testing.assert_array_equal(shifted.array, 3)
     with pytest.raises(TypeError, match="not permitted"):
         ordinary.at[0].add(2)
 
@@ -161,7 +164,7 @@ def test_converted_fields_are_shape_checked():
 
     target = Broken(jnp.zeros((3, 2)), jnp.zeros((3, 2, 2)))
     with pytest.raises(ValueError, match="modifies protected trailing axes"):
-        target.at[0].set(object())
+        target.at[0].set(object())  # ty: ignore[invalid-argument-type]
 
 
 def test_opted_in_updates_preserve_repeated_index_semantics():

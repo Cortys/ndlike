@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -19,7 +19,7 @@ from ndlike.protected_axis.jax import JaxAxisProtected
 @pytest.mark.parametrize("slots", [False, True])
 def test_inherited_layout_supports_indexing_reshape_and_jit(slots):
     @dataclass(frozen=True, slots=slots)
-    class Parent(JaxAxisProtected[jax.Array]):
+    class Parent(JaxAxisProtected):
         shared: jax.Array
         values: jax.Array
         protected_axes: ClassVar[dict[str, int]] = {"shared": 1, "values": 2}
@@ -64,7 +64,7 @@ def test_omitted_or_empty_declarations_preserve_independent_layouts(declarations
     axes = {"values": 1, "shared": 0}
     batch = {"shared"}
 
-    class Parent(JaxAxisProtected[jax.Array]):
+    class Parent(JaxAxisProtected):
         protected_axes: ClassVar[dict[str, int]] = axes
         broadcasted_batch: ClassVar[set[str]] = batch
 
@@ -85,7 +85,7 @@ def test_omitted_or_empty_declarations_preserve_independent_layouts(declarations
 @pytest.mark.parametrize("count", [0, 2])
 def test_local_axis_count_override_survives_jit(count):
     @dataclass(frozen=True)
-    class Parent(JaxAxisProtected[jax.Array]):
+    class Parent(JaxAxisProtected):
         values: jax.Array
         protected_axes: ClassVar[dict[str, int]] = {"values": 1}
 
@@ -101,7 +101,7 @@ def test_local_axis_count_override_survives_jit(count):
 
 
 def test_matching_redeclarations_use_local_field_order():
-    class Parent(JaxAxisProtected[jax.Array]):
+    class Parent(JaxAxisProtected):
         protected_axes: ClassVar[dict[str, int]] = {"values": 1, "labels": 0}
 
     class Child(Parent):
@@ -112,7 +112,7 @@ def test_matching_redeclarations_use_local_field_order():
 
 
 def test_abstract_bases_accumulate_layouts_before_concrete_validation():
-    class Base(JaxAxisProtected[jax.Array]):
+    class Base(JaxAxisProtected):
         @abstractmethod
         def method(self) -> None: ...
 
@@ -137,7 +137,7 @@ def test_abstract_bases_accumulate_layouts_before_concrete_validation():
 
 
 def test_multiple_inheritance_merges_diamond_layouts_left_to_right():
-    class Root(JaxAxisProtected[jax.Array]):
+    class Root(JaxAxisProtected):
         protected_axes: ClassVar[dict[str, int]] = {"values": 1}
 
     class Left(Root):
@@ -156,10 +156,10 @@ def test_multiple_inheritance_merges_diamond_layouts_left_to_right():
 
 
 def test_conflicting_base_counts_are_rejected():
-    class Left(JaxAxisProtected[jax.Array]):
+    class Left(JaxAxisProtected):
         protected_axes: ClassVar[dict[str, int]] = {"values": 1}
 
-    class Right(JaxAxisProtected[jax.Array]):
+    class Right(JaxAxisProtected):
         protected_axes: ClassVar[dict[str, int]] = {"values": 2}
 
     with pytest.raises(TypeError, match="conflicts with an inherited axis count"):
@@ -176,7 +176,7 @@ def test_conflicting_base_counts_are_rejected():
     ],
 )
 def test_local_declarations_are_validated_against_inherited_layout(declarations):
-    class Parent(JaxAxisProtected[Any]):
+    class Parent(JaxAxisProtected):
         protected_axes: ClassVar[dict[str, int]] = {"values": 1, "shared": 0}
         broadcasted_batch: ClassVar[set[str]] = {"shared"}
 

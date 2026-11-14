@@ -3,26 +3,27 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Protocol, Self, overload, override, runtime_checkable
+from typing import TYPE_CHECKING, Any, Never, Protocol, Self, cast, overload, override, runtime_checkable
 
 from flextype import flexdispatch
 import numpy as np
 import torch
 
-from ndlike.array_like import ArrayLikeWithoutSize
+from ndlike._operators import ArrayOperators, InplaceArrayOperators
+from ndlike.array_like import WeakArrayLike
 from ndlike.torch_operators import TorchOperatorsMixin
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from types import ModuleType
 
-    from numpy.typing import ArrayLike as NpArrayLike, DTypeLike, NDArray
+    from numpy.typing import DTypeLike, NDArray
 
     from ndlike.array_like import ToIndices
 
 
 @runtime_checkable
-class TorchLikeConvertible[DT](ArrayLikeWithoutSize[DT], Protocol):
+class TorchLikeConvertible[SetValueT = Never](WeakArrayLike[Any, Any, Any, SetValueT], Protocol):
     """Protocol for array-like objects that can be converted to torch tensors."""
 
     def __torch_like__(
@@ -36,20 +37,36 @@ class TorchLikeConvertible[DT](ArrayLikeWithoutSize[DT], Protocol):
         """Convert to a TorchLike."""
 
 
+type AnyTorchLike = TorchLike[Any, Any, Any, Any, Any, Any, Any]  # noqa: BKN001 - broad backend protocol alias
+
+
 @runtime_checkable
-class TorchLike[DT](ArrayLikeWithoutSize[DT], Protocol):
+class TorchLike[
+    OwnerT: AnyTorchLike = TorchLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = torch.Tensor,
+    SetResultT = OwnerT,
+](
+    WeakArrayLike[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
+    ArrayOperators[OpValueT, OpResultT, CompResultT],
+    InplaceArrayOperators[OpValueT],
+    Protocol,
+):
     """Protocol for array-like objects that implement torch-specific APIs."""
 
     @property
-    def T(self) -> TorchLike[Any] | torch.Tensor:  # noqa: N802
+    def T(self) -> ShapeResultT:  # noqa: N802
         """Return a transposed array."""
 
     @property
-    def mT(self) -> TorchLike[Any] | torch.Tensor:  # noqa: N802
+    def mT(self) -> ShapeResultT:  # noqa: N802
         """The transposed version of the underlying array."""
 
     @property
-    def mH(self) -> TorchLike[Any] | torch.Tensor:  # noqa: N802
+    def mH(self) -> ShapeResultT:  # noqa: N802
         """The adjoint (conjugate) transposed version of the underlying array."""
 
     @overload
@@ -101,11 +118,26 @@ class TorchLike[DT](ArrayLikeWithoutSize[DT], Protocol):
     def numpy(self, *, force: bool = False) -> NDArray[Any]:
         """Convert to a numpy array."""
 
+    def clone(self, *, memory_format: torch.memory_format = torch.preserve_format) -> OwnerT:
+        """Return a copy retaining the owner type."""
+
     def detach(self) -> Self:
         """Return a detached version of the array."""
 
 
-class TorchLikeImplementation[DT](TorchOperatorsMixin, TorchLike[DT], ABC):
+class TorchLikeImplementation[
+    OwnerT: AnyTorchLike = TorchLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = torch.Tensor,
+    SetResultT = OwnerT,
+](
+    TorchOperatorsMixin[OpValueT, OpResultT, CompResultT],
+    TorchLike[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
+    ABC,
+):
     """ABC implementation for array-like objects that behave like torch tensors.
 
     Representation-specific indexing, metadata and namespace access are explicitly
@@ -119,15 +151,14 @@ class TorchLikeImplementation[DT](TorchOperatorsMixin, TorchLike[DT], ABC):
         """Preserve inherited equality before a subclass's dataclass decorator runs."""
         super().__init_subclass__(**kwargs)
         if "__eq__" not in cls.__dict__:
-            inherited_eq = cls.__eq__
-            cls.__eq__ = inherited_eq
+            setattr(cls, "__eq__", cls.__eq__)  # noqa: B010 - do not redeclare the typed inherited method
 
     @abstractmethod
-    def __getitem__(self, index: ToIndices, /) -> Any:  # noqa: ANN401
+    def __getitem__(self, index: ToIndices, /) -> ShapeResultT:
         """Return values selected by index."""
 
     @abstractmethod
-    def __setitem__(self, index: ToIndices, value: NpArrayLike, /) -> None:
+    def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:
         """Set values selected by index."""
 
     @abstractmethod
@@ -139,7 +170,7 @@ class TorchLikeImplementation[DT](TorchOperatorsMixin, TorchLike[DT], ABC):
         """Return the length along the first axis."""
 
     @abstractmethod
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[ShapeResultT]:
         """Iterate over the first axis."""
 
     @property
@@ -164,16 +195,16 @@ class TorchLikeImplementation[DT](TorchOperatorsMixin, TorchLike[DT], ABC):
 
     @property
     @abstractmethod
-    def mT(self) -> TorchLike[Any] | torch.Tensor:  # noqa: N802
+    def mT(self) -> ShapeResultT:  # noqa: N802
         """The transposed version of the underlying array."""
 
     @property
     @abstractmethod
-    def mH(self) -> TorchLike[Any] | torch.Tensor:  # noqa: N802
+    def mH(self) -> ShapeResultT:  # noqa: N802
         """The adjoint (conjugate) transposed version of the underlying array."""
 
     @property
-    def T(self) -> TorchLike[Any] | torch.Tensor:  # noqa: N802
+    def T(self) -> ShapeResultT:  # noqa: N802
         """Inverts the order of the dimensions of the underlying array."""
         return self.permute(*reversed(range(self.ndim)))
 
@@ -247,8 +278,13 @@ class TorchLikeImplementation[DT](TorchOperatorsMixin, TorchLike[DT], ABC):
             memory_format=memory_format,
         )
 
-    @override
-    def to_device(self, device: torch.device | str | None = None, /, *, stream: int | Any | None = None) -> Self:
+    def to_device(
+        self,
+        device: torch.device | str | None = None,
+        /,
+        *,
+        stream: int | Any | None = None,  # noqa: ANN401
+    ) -> Self:
         """Move the array to the given device.
 
         Args:
@@ -266,20 +302,20 @@ class TorchLikeImplementation[DT](TorchOperatorsMixin, TorchLike[DT], ABC):
             raise NotImplementedError(msg)
         return self.to(device=device)
 
-    def clone(self, *, memory_format: torch.memory_format = torch.preserve_format) -> TorchLike[Any] | torch.Tensor:
+    def clone(self, *, memory_format: torch.memory_format = torch.preserve_format) -> OwnerT:
         """Return a copy of the array."""
-        return torch.clone(self, memory_format=memory_format)  # ty: ignore[invalid-argument-type]
+        return cast("OwnerT", torch.clone(self, memory_format=memory_format))  # ty: ignore[invalid-argument-type]
 
-    def transpose(self, dim0: int, dim1: int) -> TorchLike[Any] | torch.Tensor:
+    def transpose(self, dim0: int, dim1: int) -> ShapeResultT:
         """Return a transposed version of the array."""
-        return torch.transpose(self, dim0, dim1)  # ty: ignore[invalid-argument-type]
+        return cast("ShapeResultT", torch.transpose(self, dim0, dim1))  # ty: ignore[invalid-argument-type]
 
-    def permute(self, *dims: torch.Size | int | tuple[int] | list[int]) -> TorchLike[Any] | torch.Tensor:
+    def permute(self, *dims: torch.Size | int | tuple[int] | list[int]) -> ShapeResultT:
         """Return a permuted version of the array."""
         if len(dims) == 1 and isinstance(dims[0], (tuple, list)):
             dims = dims[0]  # ty:ignore[invalid-assignment]
 
-        return torch.permute(self, dims)  # ty: ignore[invalid-argument-type]
+        return cast("ShapeResultT", torch.permute(self, dims))  # ty: ignore[invalid-argument-type]
 
     @abstractmethod
     def __torch_function__(
@@ -311,13 +347,13 @@ class TorchLikeImplementation[DT](TorchOperatorsMixin, TorchLike[DT], ABC):
     def detach(self) -> Self:
         """Return a detached version of the array."""
 
-    def resolve_conj(self) -> TorchLike[Any] | torch.Tensor:
+    def resolve_conj(self) -> OpResultT:
         """Return a version of the array with any conjugate operations resolved."""
-        return torch.resolve_conj(self)  # ty: ignore[invalid-argument-type]
+        return cast("OpResultT", torch.resolve_conj(self))  # ty: ignore[invalid-argument-type]
 
-    def resolve_neg(self) -> TorchLike[Any] | torch.Tensor:
+    def resolve_neg(self) -> OpResultT:
         """Return a version of the array with any negation operations resolved."""
-        return torch.resolve_neg(self)  # ty: ignore[invalid-argument-type]
+        return cast("OpResultT", torch.resolve_neg(self))  # ty: ignore[invalid-argument-type]
 
 
 TorchLikeImplementation.register(torch.Tensor)

@@ -2,25 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast, overload
 
 import torch
 from torch.overrides import handle_torch_function, has_torch_function
 
 if TYPE_CHECKING:
-    import sys
     from typing import Any
 
     from ndlike.torch_like import TorchLike
-
-    if sys.version_info >= (3, 13):
-        from typing import TypeVar
-    else:
-        from typing_extensions import TypeVar
-
-    # Constraints widen custom subclasses to TorchLike; the native default also
-    # handles dispatch operands supplied only through weights or out.
-    _TorchFamily = TypeVar("_TorchFamily", torch.Tensor, TorchLike[Any], default=torch.Tensor)
 
 
 def _normalize_dims(dim: int | tuple[int, ...] | None, ndim: int) -> tuple[int, ...]:
@@ -80,16 +70,43 @@ def _broadcast_average_weights(
         raise ValueError(msg) from error
 
 
+# Resolve native calls before allowing custom operands to determine the result type.
+@overload
 def torch_average(
-    tensor: _TorchFamily | torch.Tensor,
+    tensor: torch.Tensor,
     /,
     dim: int | tuple[int, ...] | None = None,
     *,
     axis: int | tuple[int, ...] | None = None,
-    weights: _TorchFamily | torch.Tensor | None = None,
+    weights: torch.Tensor | None = None,
     keepdim: bool = False,
-    out: _TorchFamily | torch.Tensor | None = None,
-) -> torch.Tensor | _TorchFamily:
+    out: torch.Tensor | None = None,
+) -> torch.Tensor: ...
+
+
+@overload
+def torch_average[ResultT = torch.Tensor](
+    tensor: TorchLike[Any, Any, ResultT, Any, Any, Any, Any] | torch.Tensor,
+    /,
+    dim: int | tuple[int, ...] | None = None,
+    *,
+    axis: int | tuple[int, ...] | None = None,
+    weights: TorchLike[Any, Any, ResultT, Any, Any, Any, Any] | torch.Tensor | None = None,
+    keepdim: bool = False,
+    out: TorchLike[Any, Any, ResultT, Any, Any, Any, Any] | torch.Tensor | None = None,
+) -> ResultT: ...
+
+
+def torch_average[ResultT = torch.Tensor](
+    tensor: TorchLike[Any, Any, ResultT, Any, Any, Any, Any] | torch.Tensor,
+    /,
+    dim: int | tuple[int, ...] | None = None,
+    *,
+    axis: int | tuple[int, ...] | None = None,
+    weights: TorchLike[Any, Any, ResultT, Any, Any, Any, Any] | torch.Tensor | None = None,
+    keepdim: bool = False,
+    out: TorchLike[Any, Any, ResultT, Any, Any, Any, Any] | torch.Tensor | None = None,
+) -> ResultT:
     """Compute a possibly weighted average over tensor dimensions.
 
     Args:
@@ -113,15 +130,18 @@ def torch_average(
 
     relevant_args = (tensor, weights, out)
     if has_torch_function(relevant_args):
-        return handle_torch_function(
-            torch_average,
-            relevant_args,
-            tensor,
-            dim,
-            axis=axis,
-            weights=weights,
-            keepdim=keepdim,
-            out=out,
+        return cast(
+            "ResultT",
+            handle_torch_function(
+                torch_average,
+                relevant_args,
+                tensor,
+                dim,
+                axis=axis,
+                weights=weights,
+                keepdim=keepdim,
+                out=out,
+            ),
         )
 
     # Custom operands have already been handled above; only native tensors reach here.
@@ -146,9 +166,9 @@ def torch_average(
 
     result = weighted_sum / weight_sum
     if out is not None:
-        out.copy_(result)
-        return out
-    return result
+        cast("torch.Tensor", out).copy_(result)
+        return cast("ResultT", out)
+    return cast("ResultT", result)
 
 
 __all__ = ["torch_average"]

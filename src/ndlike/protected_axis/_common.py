@@ -341,7 +341,7 @@ def normalize_batch_reduction_axes(
     if isinstance(axis, int):
         return normalize_axis(axis, batch_ndim)
     if isinstance(axis, (tuple, list)) and all(isinstance(item, int) for item in axis):
-        return normalize_axes(cast("tuple[int, ...]", tuple(axis)), batch_ndim)
+        return normalize_axes(tuple(axis), batch_ndim)
 
     msg = f"reduction {parameter_name} must be None, an int, or a tuple/list of ints."
     raise TypeError(msg)

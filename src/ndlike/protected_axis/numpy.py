@@ -5,11 +5,13 @@ from __future__ import annotations
 from abc import ABC
 from dataclasses import replace
 from inspect import isabstract
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast, overload, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Never, Self, cast, overload, override
 
 import numpy as np
+from numpy.typing import NDArray
 
 from ndlike.array_like import (
+    AnyNumpyLike,
     ArrayAPIVersion,
     ArrayFlagsLike,
     NumpyLike,
@@ -28,7 +30,13 @@ from ndlike.protected_axis._common import (
     value_ndim,
     value_shape,
 )
-from ndlike.protected_axis.numpy_functions import numpy_function
+from ndlike.protected_axis.numpy_functions import (
+    numpy_function,
+    protected_comparison_ufunc,
+    protected_matmul_ufunc,
+    validate_ufunc_outputs,
+    validate_ufunc_protected_shapes,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -37,6 +45,7 @@ if TYPE_CHECKING:
     from numpy.typing import DTypeLike
 
 
+type AnyNumpyAxisProtected = NumpyAxisProtected[Any, Any, Any, Any, Any, Any, Any]  # noqa: BKN001 - broad backend protocol alias
 type NumpyProtectedValue = NumpyLike[Any] | np.ndarray
 
 
@@ -46,8 +55,18 @@ def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
         raise ValueError(msg)
 
 
-class NumpyAxisProtected[T: NumpyLike | np.ndarray](
-    _AxisProtectedBase[NumpyProtectedValue, "NumpyAxisProtected[T]"], NumpyLikeImplementation[T], ABC
+class NumpyAxisProtected[
+    OwnerT: AnyNumpyLike = NumpyLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = NDArray[np.bool_],
+    SetResultT = OwnerT,
+](
+    _AxisProtectedBase[NumpyProtectedValue, OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT],
+    NumpyLikeImplementation[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
+    ABC,
 ):
     """ABC for representations with one or multiple protected array-like fields."""
 
@@ -82,7 +101,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
             if not isinstance(methods, list) or not all(isinstance(method, str) for method in methods):
                 msg = f"{cls.__name__}.permitted_ufuncs[{ufunc.__name__!r}] must be a list[str]."
                 raise TypeError(msg)
-            normalized_permitted_ufuncs[ufunc] = [cast("str", method) for method in methods]
+            normalized_permitted_ufuncs[ufunc] = list(methods)
         cls.permitted_ufuncs = normalized_permitted_ufuncs
 
         permitted_functions = getattr(cls, "permitted_functions", set())
@@ -122,13 +141,13 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
         self,
         values: dict[str, NumpyProtectedValue],
         func: Callable | None,
-    ) -> NumpyAxisProtected[T]: ...
+    ) -> OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT: ...
 
     def with_protected_values(
         self,
         values: dict[str, NumpyProtectedValue],
         func: Callable | None = None,  # noqa: ARG002
-    ) -> NumpyAxisProtected[T]:
+    ) -> OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT:
         """Return a copy with updated protected field values."""
         return replace(self, **values)  # ty:ignore[invalid-argument-type]
 
@@ -140,7 +159,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
         casting: Literal["no", "equiv", "safe", "same_kind", "unsafe"] = "unsafe",
         subok: bool = True,
         copy: bool = True,
-    ) -> Self:
+    ) -> OpResultT:
         """Cast each protected field using ndarray.astype's casting and layout options."""
         values = self.protected_values()
         updates = {
@@ -148,8 +167,8 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
             for name, value in values.items()
         }
         if all(updates[name] is value for name, value in values.items()):
-            return self
-        return self.with_protected_values(updates)
+            return cast("OpResultT", self)
+        return cast("OpResultT", self.with_protected_values(updates))
 
     @override
     def __len__(self) -> int:
@@ -159,7 +178,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
         return self.shape[0]
 
     @override
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[ShapeResultT]:
         for index in range(len(self)):
             yield self[index]
 
@@ -243,14 +262,14 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
         return candidate_values
 
     @override
-    def __getitem__(self, index: ToIndices, /) -> Self:
+    def __getitem__(self, index: ToIndices, /) -> ShapeResultT:
         require_effective_fields(self._effective_protected_axes)
         values = self.protected_values()
         indexed: dict[str, NumpyProtectedValue] = {}
 
         for name, axes in self._effective_protected_axes.items():
             full_index = self._index_with_protected_axes(index, axes)
-            result = cast("Any", values[name])[full_index]
+            result = values[name][full_index]
 
             if axes == 0 and not hasattr(result, "ndim"):
                 result = np.asarray(result)
@@ -266,18 +285,18 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
 
             indexed[name] = result
 
-        return self.with_protected_values(indexed)
+        return cast("ShapeResultT", self.with_protected_values(indexed))
 
     @override
-    def __setitem__(self, index: ToIndices, value: object, /) -> None:
+    def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:
         require_effective_fields(self._effective_protected_axes)
-        value = self._prepare_assignment_value(value)
+        prepared = self._prepare_assignment_value(value)
         values = self.protected_values()
-        candidate_values = self._coerce_assignment_value(value)
+        candidate_values = self._coerce_assignment_value(prepared)
 
         for name, axes in self._effective_protected_axes.items():
             full_index = self._index_with_protected_axes(index, axes)
-            values[name][full_index] = candidate_values[name]  # ty:ignore[invalid-assignment]
+            cast("Any", values[name])[full_index] = candidate_values[name]
 
     def _postprocess_ufunc_result(
         self,
@@ -286,7 +305,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
         ufunc: np.ufunc,
         method: str,
     ) -> np.ndarray:
-        """Optionally postprocess wrapped ufunc results."""
+        """Optionally postprocess wrapped ufunc results; comparisons bypass this hook."""
         del ufunc, method
         return result
 
@@ -297,6 +316,13 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
         *inputs: object,
         **kwargs: object,
     ) -> object:
+        if ufunc is np.matmul and method == "__call__":
+            return protected_matmul_ufunc(self, inputs, kwargs)
+        if (
+            ufunc in (np.equal, np.not_equal, np.less, np.less_equal, np.greater, np.greater_equal)
+            and method == "__call__"
+        ):
+            return protected_comparison_ufunc(self, ufunc, inputs, kwargs)
         if method not in {"__call__", "reduce", "accumulate", "reduceat"}:
             return NotImplemented
 
@@ -340,13 +366,15 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
             msg = "non-protected out is only supported for single-field protected objects."
             raise TypeError(msg)
 
+        validate_ufunc_protected_shapes(protected_axes, self_values, [*input_values, *out_values])
+
         def map_reduce_axis(axis: object, batch_ndim: int) -> int | tuple[int, ...]:
             if axis is None:
                 return tuple(range(batch_ndim))
             if isinstance(axis, int):
                 return normalize_axis(axis, batch_ndim)
             if isinstance(axis, (tuple, list)) and all(isinstance(item, int) for item in axis):
-                axis_tuple = cast("tuple[int, ...]", tuple(axis))
+                axis_tuple = tuple(axis)
                 return normalize_axes(axis_tuple, batch_ndim)
             msg = "reduce axis must be None, an int, or a tuple/list of ints."
             raise TypeError(msg)
@@ -359,6 +387,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
 
         output_count = ufunc.nout if method == "__call__" else 1
         results: list[dict[str, NumpyProtectedValue]] = [{} for _ in range(output_count)]
+        field_calls: dict[str, tuple[list[Any], dict[str, Any]]] = {}
         for name, axes_count in protected_axes.items():
             field_kwargs = dict(kwargs)
 
@@ -403,6 +432,13 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
                     field_kwargs["axis"] = map_indexed_axis(raw_axis, batch_ndim, method_name="reduceat")
                     field_input_items = field_input_items[:2]
 
+            field_calls[name] = (field_input_items, field_kwargs)
+
+        if any(item is not None for item in out_items):
+            validate_ufunc_outputs(ufunc, method, field_calls, protected_axes, self_values)
+
+        for name, (field_input_items, field_kwargs) in field_calls.items():
+            axes_count = protected_axes[name]
             result = getattr(ufunc, method)(*field_input_items, **field_kwargs)
 
             result_items = result if output_count > 1 else (result,)
@@ -427,7 +463,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
                 if isinstance(item, np.ndarray):
                     item = self._postprocess_ufunc_result(item, ufunc=ufunc, method=method)
 
-                results[index][name] = cast("NumpyProtectedValue", item)
+                results[index][name] = item
 
         outputs: list[object] = []
         for index, values in enumerate(results):
@@ -458,9 +494,7 @@ class NumpyAxisProtected[T: NumpyLike | np.ndarray](
     ) -> object:
         return numpy_function(func, types, args, kwargs)
 
-    def reshape(
-        self, *shape: int | tuple[int, ...], order: str = "C", copy: bool | None = None
-    ) -> NumpyLike[Any] | np.ndarray:
+    def reshape(self, *shape: int | tuple[int, ...], order: str = "C", copy: bool | None = None) -> ShapeResultT:
         """Return a copy with reshaped protected values."""
         if len(shape) == 1 and isinstance(shape[0], tuple):
             shape = shape[0]

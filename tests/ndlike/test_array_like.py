@@ -3,20 +3,92 @@
 from __future__ import annotations
 
 from inspect import isabstract
-from typing import TYPE_CHECKING, Any, ClassVar, assert_type, get_origin
-from typing_extensions import get_protocol_members
+from typing import TYPE_CHECKING, Any, ClassVar, Never, Self, assert_type, get_args, get_origin, get_protocol_members
 
 import numpy as np
 import pytest
 
-from ndlike.array_like import NumpyLike, NumpyLikeConvertible, NumpyLikeImplementation, to_numpy_like
+from ndlike.array_like import (
+    ArrayLike,
+    NumpyLike,
+    NumpyLikeConvertible,
+    NumpyLikeImplementation,
+    ToIndices,
+    WeakArrayLike,
+    to_numpy_like,
+)
 
 if TYPE_CHECKING:
+    from numpy.typing import ArrayLike as NpArrayLike
 
-    def _check_dispatched_method_types(
-        protocol: NumpyLike[Any], implementation: NumpyLikeImplementation[np.ndarray]
+    class _CustomValue:
+        """An assignment value with no NumPy conversion protocol."""
+
+    class _SelfOnlyArray(ArrayLike):
+        def __setitem__(self, index: ToIndices, value: Self, /) -> None: ...
+
+    class _ExtraAssignmentArray(ArrayLike[Any, Any, Any, _CustomValue]):
+        def __setitem__(self, index: ToIndices, value: Self | _CustomValue, /) -> None: ...
+
+    def _check_default_native_array_protocols(array: np.ndarray) -> tuple[ArrayLike[Any], WeakArrayLike[Any]]:
+        return array, array
+
+    def _check_self_only_assignments(array: ArrayLike, weak: WeakArrayLike) -> None:
+        assert_type(array, ArrayLike[ArrayLike[Any]])
+        assert_type(weak, WeakArrayLike[WeakArrayLike[Any]])
+        array[0] = array
+        weak[0] = weak
+        array[0] = 1  # ty: ignore[invalid-assignment]
+        weak[0] = 1  # ty: ignore[invalid-assignment]
+
+    def _check_concrete_self_assignments(
+        array: _SelfOnlyArray, extra: _ExtraAssignmentArray, value: _CustomValue
     ) -> None:
-        type Result = NumpyLike[Any] | np.ndarray
+        array[0] = array
+        extra[0] = extra
+        extra[0] = value
+        array[0] = value  # ty: ignore[invalid-assignment]
+        extra[0] = 1  # ty: ignore[invalid-assignment]
+
+    def _check_native_array_protocols(
+        array: np.ndarray,
+    ) -> tuple[ArrayLike[np.ndarray], WeakArrayLike[np.ndarray]]:
+        return array, array
+
+    def _check_numpy_assignment_inputs(array: np.ndarray) -> ArrayLike[Any, Any, Any, NpArrayLike]:
+        return array
+
+    def _check_custom_assignment_protocols(
+        array: NumpyLikeImplementation[NumpyLike[Any], Any, NumpyLike[Any], object],
+    ) -> tuple[ArrayLike[Any, Any, Any, _CustomValue], WeakArrayLike[Any, Any, Any, _CustomValue]]:
+        return array, array
+
+    def _check_assignment_values(
+        array: ArrayLike[Any, Any, Any, _CustomValue],
+        weak: WeakArrayLike[Any, Any, Any, _CustomValue],
+        value: _CustomValue,
+    ) -> None:
+        array[0] = array
+        weak[0] = weak
+        array[0] = value
+        weak[0] = value
+        array[0] = 1  # ty: ignore[invalid-assignment]
+        weak[0] = 1  # ty: ignore[invalid-assignment]
+
+    def _check_assignment_contravariance(
+        array: ArrayLike[Any, Any, Any, object], weak: WeakArrayLike[Any, Any, Any, object]
+    ) -> tuple[ArrayLike[Any, Any, Any, _CustomValue], WeakArrayLike[Any, Any, Any, _CustomValue]]:
+        return array, weak
+
+    def _check_assignment_cannot_be_widened(
+        array: ArrayLike[Any, Any, Any, _CustomValue], weak: WeakArrayLike[Any, Any, Any, _CustomValue]
+    ) -> None:
+        broad: ArrayLike[Any, Any, Any, object] = array  # ty: ignore[invalid-assignment]
+        broad_weak: WeakArrayLike[Any, Any, Any, object] = weak  # ty: ignore[invalid-assignment]
+        del broad, broad_weak
+
+    def _check_dispatched_method_types(protocol: NumpyLike, implementation: NumpyLikeImplementation) -> None:
+        type Result = NumpyLike[Any]
 
         assert_type(protocol.T, Result)
         assert_type(protocol.mT, Result)
@@ -42,6 +114,16 @@ class _Convertible(np.ndarray):
 
 def test_converter_protocol_remains_generic() -> None:
     assert get_origin(NumpyLikeConvertible[np.ndarray]) is NumpyLikeConvertible
+
+
+@pytest.mark.parametrize("protocol", [WeakArrayLike, ArrayLike, NumpyLike, NumpyLikeConvertible])
+def test_assignment_type_defaults_to_never(protocol) -> None:
+    args = get_args(protocol[()])
+    if protocol is NumpyLikeConvertible:
+        assert args == (Never,)
+    else:
+        assert args[3] is Never
+        assert args[1] == args[2] == args[4] == args[6] == args[0]
 
 
 def test_array_converter_uses_its_hook() -> None:
@@ -80,13 +162,20 @@ def test_native_array_is_numpy_like() -> None:
     assert to_numpy_like(data, copy=False) is data
 
 
+@pytest.mark.parametrize("shape", [(), (3,), (2, 3)])
+def test_native_array_satisfies_core_protocols(shape: tuple[int, ...]) -> None:
+    data = np.zeros(shape)
+    assert isinstance(data, WeakArrayLike)
+    assert isinstance(data, ArrayLike)
+
+
 class TestNumpyLikeImplementationFallbacks:
     """Default error paths in NumpyLikeImplementation (the abstract base)."""
 
     def _make_minimal_subclass(self):
         """Build a minimal concrete subclass that does not override the error paths."""
 
-        class _Minimal(NumpyLikeImplementation[np.ndarray]):
+        class _Minimal(NumpyLikeImplementation):
             @property
             def dtype(self):
                 return np.dtype(np.float64)

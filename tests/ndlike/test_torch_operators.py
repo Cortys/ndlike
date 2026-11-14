@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import operator
 from types import NotImplementedType
-from typing import ClassVar, Never
+from typing import Any, ClassVar, Never
 
 import numpy as np
 import pytest
@@ -17,7 +17,7 @@ from torch.testing import assert_close
 
 from ndlike.protected_axis.numpy import NumpyAxisProtected
 from ndlike.protected_axis.torch import TorchAxisProtected
-from ndlike.torch_like import TorchLikeImplementation
+from ndlike.torch_like import TorchLike, TorchLikeImplementation
 from ndlike.torch_operators import TorchOperatorsMixin
 
 _BINARY: list[tuple[Callable, Callable]] = [
@@ -33,6 +33,21 @@ _BINARY: list[tuple[Callable, Callable]] = [
     (operator.xor, torch.bitwise_xor),
     (operator.lshift, torch.bitwise_left_shift),
     (operator.rshift, torch.bitwise_right_shift),
+]
+_INPLACE: list[tuple[Callable, Callable]] = [
+    (operator.iadd, torch.add),
+    (operator.isub, torch.sub),
+    (operator.imul, torch.mul),
+    (operator.itruediv, torch.true_divide),
+    (operator.ifloordiv, torch.floor_divide),
+    (operator.imod, torch.remainder),
+    (operator.ipow, torch.pow),
+    (operator.imatmul, torch.matmul),
+    (operator.iand, torch.bitwise_and),
+    (operator.ior, torch.bitwise_or),
+    (operator.ixor, torch.bitwise_xor),
+    (operator.ilshift, torch.bitwise_left_shift),
+    (operator.irshift, torch.bitwise_right_shift),
 ]
 _COMPARISONS: list[tuple[Callable, Callable]] = [
     (operator.eq, torch.eq),
@@ -70,7 +85,7 @@ class _Recording(TorchOperatorsMixin):
 
 
 @dataclass(frozen=True)
-class _Tensor(TorchAxisProtected[torch.Tensor]):
+class _Tensor(TorchAxisProtected[TorchLike[Any], Any]):
     tensor: torch.Tensor
     protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
 
@@ -79,11 +94,16 @@ class _Tensor(TorchAxisProtected[torch.Tensor]):
         if not all(issubclass(t, (cls, torch.Tensor)) for t in types):
             return NotImplemented
         raw = tuple(arg.tensor if isinstance(arg, cls) else arg for arg in args)
-        return cls(func(*raw, **(kwargs or {})))
+        mutable_kwargs = dict(kwargs or {})
+        out = mutable_kwargs.get("out")
+        if isinstance(out, cls):
+            mutable_kwargs["out"] = out.tensor
+        result = func(*raw, **mutable_kwargs)
+        return out if isinstance(out, cls) else cls(result)
 
 
 @dataclass(frozen=True)
-class _NumpyArray(NumpyAxisProtected[np.ndarray]):
+class _NumpyArray(NumpyAxisProtected):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 0}
     permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {
@@ -193,13 +213,72 @@ def test_implementation_inherits_matmul(reflected):
     assert_close(result.tensor, expected)
 
 
-def test_augmented_assignment_rebinds_without_mutating():
+@pytest.mark.parametrize(("op", "func"), _INPLACE)
+def test_inplace_dispatch_preserves_output_and_operands(op, func):
+    x, other = _Recording(), torch.ones(2)
+    result = op(x, other)
+    assert result.func is func
+    assert result.args[0] is x
+    assert result.args[1] is other
+    assert result.kwargs["out"] is x
+
+
+@pytest.mark.parametrize(
+    ("op", "func", "kind"),
+    [
+        (op, func, kind)
+        for op, func in _INPLACE
+        for kind in ("scalar", "torch", "wrapper")
+        if op is not operator.imatmul or kind != "scalar"
+    ],
+)
+def test_inplace_operators_mutate_existing_storage(op, func, kind):
+    dtype = torch.float32 if op is operator.itruediv else torch.int64
+    x = _Tensor(torch.tensor([[4, 6], [8, 10]], dtype=dtype))
+    other_raw = torch.tensor([[2, 1], [1, 2]], dtype=dtype)
+    other = {"scalar": 2, "torch": other_raw, "wrapper": _Tensor(other_raw)}[kind]
+    raw = other.tensor if isinstance(other, _Tensor) else other
+    expected = func(x.tensor, raw)
+    storage = x.tensor
+
+    result = op(x, other)
+
+    assert result is x
+    assert x.tensor is storage
+    assert_close(storage, expected)
+    assert_close(other_raw, torch.tensor([[2, 1], [1, 2]], dtype=dtype))
+
+
+def test_augmented_assignment_mutates_without_rebinding():
     x = _Tensor(torch.ones((2, 3)))
     original = x
     x += 2
-    assert x is not original
-    assert_close(original.tensor, torch.ones((2, 3)))
+    assert isinstance(x, _Tensor)
+    assert x is original
+    assert_close(original.tensor, torch.full((2, 3), 3.0))
     assert_close(x.tensor, torch.full((2, 3), 3.0))
+
+
+@pytest.mark.parametrize(("op", "func"), _INPLACE)
+def test_inplace_numpy_operands_are_declined(op, func):
+    del func
+    assert getattr(_Recording(), f"__{op.__name__}__")(np.ones(2)) is NotImplemented
+
+
+def test_inplace_foreign_operand_can_handle_reflected_fallback():
+    class Reflected:
+        def __radd__(self, left) -> tuple[object, object]:
+            return (left, self)
+
+    x, other = _Recording(), Reflected()
+    assert operator.iadd(x, other) == (x, other)
+
+
+def test_inplace_backend_errors_propagate_without_rebinding():
+    x = _Tensor(torch.tensor([1, 2]))
+    with pytest.raises(RuntimeError, match="cast"):
+        operator.itruediv(x, 2)
+    assert_close(x.tensor, torch.tensor([1, 2]))
 
 
 def test_modular_exponentiation_is_unsupported():
@@ -214,7 +293,7 @@ def test_implementation_inherits_mixin_by_default():
     assert issubclass(TorchLikeImplementation, TorchOperatorsMixin)
 
 
-@pytest.mark.parametrize(("op", "func"), [*_BINARY, *_UNARY, *_COMPARISONS, (operator.matmul, torch.matmul)])
+@pytest.mark.parametrize(("op", "func"), [*_BINARY, *_INPLACE, *_UNARY, *_COMPARISONS, (operator.matmul, torch.matmul)])
 def test_override_errors_propagate_unchanged(op, func):
     error = TypeError("implementation error")
 
@@ -229,7 +308,7 @@ def test_override_errors_propagate_unchanged(op, func):
     assert caught.value is error
 
 
-@pytest.mark.parametrize("op", [operator.add, operator.neg, operator.matmul, divmod])
+@pytest.mark.parametrize("op", [operator.add, operator.iadd, operator.neg, operator.matmul, divmod])
 def test_declined_overrides_raise_torch_dispatch_errors(op):
     class _Denied(TorchOperatorsMixin):
         @classmethod

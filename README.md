@@ -13,7 +13,7 @@ the structure of its elements.
 
 ## Installation
 
-Requires Python 3.12 or newer.
+Requires Python 3.13 or newer.
 
 ```bash
 pip install ndlike
@@ -28,8 +28,57 @@ never imported by the backend-independent modules. Import backend modules explic
 
 `ndlike.array_like.ArrayLike` describes indexing, shape, and metadata rather than
 just convertibility to an array (as in `numpy.typing.ArrayLike`). It does not
-require the full numerical Array API. `ArrayLikeWithoutSize` covers the shared
+require the full numerical Array API. `WeakArrayLike` covers the shared
 interface without NumPy/JAX's integer `size` property, since Torch uses a method.
+
+The array protocols and implementation bases use these positional type parameters:
+
+| Parameter | Default | Contract |
+| --- | --- | --- |
+| `OwnerT` | Broad corresponding array protocol | Owner, bounded to the corresponding protocol |
+| `OpValueT` | `OwnerT` | Accepted operation operands |
+| `OpResultT` | `OwnerT` | Arithmetic and reduction results |
+| `SetValueT` | `Never` | Assignment values in addition to `Self` |
+| `ShapeResultT` | `OwnerT` | Shape, indexing, and iteration-element results |
+| `CompResultT` | Backend boolean array type | Comparison results |
+| `SetResultT` | `OwnerT` | Functional update results |
+
+Explicit result arguments replace the default; they are not unioned with the owner.
+Copies (`copy`, `clone`, and `jax_copy`) return `OwnerT`. Indexing returns
+`ShapeResultT`, and iteration yields elements of that type.
+The backend-neutral comparison default is `WeakArrayLike`. JAX and Torch array
+annotations do not encode boolean dtype. `WeakArrayLike` and `ArrayLike` require
+indexing, shape, and metadata interfaces without numerical operators, so they also
+cover boolean arrays that do not support all numerical operators. Operator requirements belong to `NumpyLike`, `JaxLike`,
+and `TorchLike`.
+
+For example, `JaxLike[MyArray, MyArray | float]` accepts its own type and floats
+as operation operands while returning `MyArray` by default. Additional assignment
+inputs occupy the fourth slot. `JaxLike[MyArray, MyArray, MyArray, float]` accepts
+`Self | float` for assignment and `.at` updates. `__setitem__` returns `None`;
+`.at[index].set(...)` and the arithmetic update methods return `SetResultT`, while
+`.at[index].get()` returns `ShapeResultT`. The helper protocols expose these as
+`JaxIndexUpdateHelper[ValueT, ResultT, ShapeResultT = ResultT]` and
+`JaxIndexUpdateRef[ValueT, ResultT, ShapeResultT = ResultT]`.
+Both helper protocols are final: custom helpers implement their interfaces structurally.
+
+An extensible base can forward its owner with
+`class Vector[T: "Vector"](JaxLikeImplementation[T]): ...`; a leaf specializes it
+with `class ConcreteVector(Vector["ConcreteVector"]): ...`. Implementations must
+fulfill the declared result contracts. The owner parameter does not automatically
+make `self` assignable to `T` inside the generic base.
+
+Arguments are positional; trailing defaults may be omitted. Existing single type
+arguments now mean the owner, not an extra assignment value or storage type.
+Conversion protocols retain their single additional-assignment parameter.
+The `NumpyAxisProtected`, `JaxAxisProtected`, and `TorchAxisProtected` bases use
+the same seven parameters and defaults as their corresponding `*Like` types;
+the former storage parameter is removed. For example,
+`class Vector(JaxAxisProtected["Vector", "Vector | float"]): ...` preserves
+`Vector` results while accepting scalar operands. Native contracts can be
+written as `NumpyLike[np.ndarray]`, `JaxLike[jax.Array]`, or
+`TorchLike[torch.Tensor]`. Unspecialized backend protocols use broad owner and
+operand defaults, so native arrays need not match that particular specialization.
 
 Backend-specific APIs build on these protocols:
 
@@ -70,7 +119,7 @@ from ndlike.protected_axis.numpy import NumpyAxisProtected
 
 
 @dataclass
-class Vectors(NumpyAxisProtected[np.ndarray]):
+class Vectors(NumpyAxisProtected["Vectors"]):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
@@ -114,7 +163,7 @@ from ndlike.protected_axis.jax import JaxAxisProtected
 
 
 @dataclass(frozen=True)
-class Vectors(JaxAxisProtected[jax.Array]):
+class Vectors(JaxAxisProtected):
     vectors: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"vectors": 1}
 

@@ -14,6 +14,7 @@ pytest.importorskip("jax")
 import jax
 from jax import numpy as jnp
 
+from ndlike.jax_like import JaxLike
 from ndlike.protected_axis._common import validate_batch_sync as _validate_batch_sync
 from ndlike.protected_axis.jax import JaxAtMethod, JaxAxisProtected
 from ndlike.protected_axis.jax_functions import (
@@ -52,7 +53,7 @@ from ndlike.jax_functions import (
 
 
 @dataclass(frozen=True, slots=True)
-class _SingleArray(JaxAxisProtected[Any]):
+class _SingleArray(JaxAxisProtected[JaxLike[Any], Any, JaxLike[Any], jax.Array]):
     """Single jax array field with one protected trailing axis."""
 
     array: jax.Array
@@ -71,7 +72,7 @@ class _SingleArray(JaxAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _ScalarArray(JaxAxisProtected[Any]):
+class _ScalarArray(JaxAxisProtected):
     """Single jax array field with no protected trailing axis."""
 
     array: jax.Array
@@ -80,7 +81,7 @@ class _ScalarArray(JaxAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _PairArray(JaxAxisProtected[Any]):
+class _PairArray(JaxAxisProtected):
     """Two jax array field with no protected trailing axes."""
 
     first: jax.Array
@@ -89,7 +90,7 @@ class _PairArray(JaxAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _PairArrayProtected(JaxAxisProtected[Any]):
+class _PairArrayProtected(JaxAxisProtected):
     """Two jax array field each with one protected trailing axis."""
 
     left: jax.Array
@@ -98,7 +99,7 @@ class _PairArrayProtected(JaxAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _NumpyOnly(JaxAxisProtected[Any]):
+class _NumpyOnly(JaxAxisProtected):
     """Edge case: a jax-protected representation whose only field is numpy.
 
     The representation is unusual but allowed; it triggers the ``_jax_protected_value``
@@ -110,7 +111,7 @@ class _NumpyOnly(JaxAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _MixedArrayNumpy(JaxAxisProtected[Any]):
+class _MixedArrayNumpy(JaxAxisProtected):
     """A jax array alongside a numpy sidecar, both with one protected trailing axis."""
 
     array: jax.Array
@@ -120,7 +121,7 @@ class _MixedArrayNumpy(JaxAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _MixedBatchArrayNumpy(JaxAxisProtected[Any]):
+class _MixedBatchArrayNumpy(JaxAxisProtected[JaxLike[Any], Any, JaxLike[Any], JaxLike[Any]]):
     """A jax array alongside a numpy object sidecar, with no protected trailing axes."""
 
     array: jax.Array
@@ -129,7 +130,7 @@ class _MixedBatchArrayNumpy(JaxAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _BrokenIndexing(JaxAxisProtected[Any]):
+class _BrokenIndexing(JaxAxisProtected):
     """Single protected field whose indexing helper skips the trailing-axis guard."""
 
     array: jax.Array
@@ -329,14 +330,14 @@ def test_at_set_rejects_tuple_with_wrong_length() -> None:
     """Assigning a tuple with the wrong number of fields raises TypeError."""
     x = _PairArray(jnp.zeros((2, 2)), jnp.ones((2, 2)))
     with pytest.raises(TypeError, match="Expected tuple"):
-        _ = x.at[0].set((jnp.zeros(2),))
+        _ = x.at[0].set((jnp.zeros(2),))  # ty: ignore[invalid-argument-type]
 
 
 def test_at_set_rejects_scalar_for_multi_field() -> None:
     """Single value assignment is rejected for multi-field protected objects."""
     x = _PairArray(jnp.zeros((2, 2)), jnp.ones((2, 2)))
     with pytest.raises(TypeError, match="multi-field protected object"):
-        _ = x.at[0].set(jnp.zeros(2))
+        _ = x.at[0].set(jnp.zeros(2))  # ty: ignore[invalid-argument-type]
 
 
 def test_at_set_rejects_value_with_wrong_protected_shape() -> None:
@@ -520,7 +521,7 @@ def test_at_arithmetic_update_rejects_numpy_sidecar() -> None:
     )
 
     with pytest.raises(TypeError, match="not supported for NumPy field"):
-        _ = x.at[0].add((1.0, 1.0))
+        _ = x.at[0].add((1.0, 1.0))  # ty: ignore[invalid-argument-type]
 
 
 def test_at_set_unwraps_zero_dim_object_array() -> None:
@@ -656,7 +657,7 @@ def test_take_along_axis_rejects_non_array_indices() -> None:
     x = _SingleArray(jnp.arange(6.0).reshape(2, 3))
 
     with pytest.raises(TypeError, match="no implementation found"):
-        jax_take_along_axis(x, [0, 1], axis=0)  # ty: ignore[invalid-argument-type]
+        jax_take_along_axis(x, [0, 1], axis=0)  # ty: ignore[no-matching-overload]
 
 
 def test_average_skips_weight_expansion_for_unprotected_axes() -> None:
@@ -780,7 +781,7 @@ def test_concatenate_rejects_non_int_axis() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="concatenate axis must be an int or None"):
-        jax_concatenate((x, x), axis="0")  # ty: ignore[invalid-argument-type]
+        jax_concatenate((x, x), axis="0")  # ty: ignore[no-matching-overload]
 
 
 def test_stack_rejects_non_int_axis() -> None:
@@ -788,7 +789,7 @@ def test_stack_rejects_non_int_axis() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="stack axis must be an int"):
-        jax_stack((x, x), axis=None)  # ty: ignore[invalid-argument-type]
+        jax_stack((x, x), axis=None)  # ty: ignore[no-matching-overload]
 
 
 def test_sequence_ops_reject_mismatched_protected_axes() -> None:
@@ -824,7 +825,7 @@ def test_expand_dims_rejects_non_int_axis() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="expand_dims axis must be an int"):
-        jax_expand_dims(x, axis="0")  # ty: ignore[invalid-argument-type]
+        jax_expand_dims(x, axis="0")  # ty: ignore[no-matching-overload]
 
 
 def test_squeeze_rejects_non_int_axis() -> None:
@@ -832,7 +833,7 @@ def test_squeeze_rejects_non_int_axis() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="squeeze axis must be an int"):
-        jax_squeeze(x, axis="0")  # ty: ignore[invalid-argument-type]
+        jax_squeeze(x, axis="0")  # ty: ignore[no-matching-overload]
 
 
 def test_squeeze_accepts_tuple_axis() -> None:
@@ -850,7 +851,7 @@ def test_swapaxes_rejects_non_int_axis() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="swapaxes axis values must be integers"):
-        jax_swapaxes(x, "0", 1)  # ty: ignore[invalid-argument-type]
+        jax_swapaxes(x, "0", 1)  # ty: ignore[no-matching-overload]
 
 
 def test_moveaxis_rejects_non_int_source() -> None:
@@ -858,7 +859,7 @@ def test_moveaxis_rejects_non_int_source() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="moveaxis source must be an int"):
-        jax_moveaxis(x, "0", 1)  # ty: ignore[invalid-argument-type]
+        jax_moveaxis(x, "0", 1)  # ty: ignore[no-matching-overload]
 
 
 def test_moveaxis_rejects_non_int_destination() -> None:
@@ -866,7 +867,7 @@ def test_moveaxis_rejects_non_int_destination() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="moveaxis destination must be an int"):
-        jax_moveaxis(x, 0, "1")  # ty: ignore[invalid-argument-type]
+        jax_moveaxis(x, 0, "1")  # ty: ignore[no-matching-overload]
 
 
 def test_transpose_rejects_axes_of_wrong_length() -> None:
@@ -882,7 +883,7 @@ def test_transpose_rejects_non_int_axes() -> None:
     x = _SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
 
     with pytest.raises(TypeError, match="transpose axes must be a tuple/list of integers"):
-        jax_transpose(x, axes=("0", "1"))  # ty: ignore[invalid-argument-type]
+        jax_transpose(x, axes=("0", "1"))  # ty: ignore[no-matching-overload]
 
 
 def test_jax_sharding() -> None:
@@ -912,7 +913,9 @@ def test_jax_radd() -> None:
     result = 5.0 + x
     assert isinstance(result, _SingleArray)
     assert jnp.allclose(result.array, x.array + 5.0)
-    assert jnp.allclose(result.array, (x + 5.0).array)
+    forward = x + 5.0
+    assert isinstance(forward, _SingleArray)
+    assert jnp.allclose(result.array, forward.array)
 
 
 def test_jax_rsub() -> None:
@@ -952,7 +955,7 @@ def test_jax_take_along_axis() -> None:
 def _unwrap(func: Callable, levels: int) -> Callable:
     """Peel back ``@wraps``-based decoration to reach a dispatch handler's original body."""
     for _ in range(levels):
-        func = func.__wrapped__  # ty: ignore[unresolved-attribute]
+        func = func.__wrapped__  # ty: ignore[missing-union-attribute]
     return func
 
 
@@ -1080,7 +1083,7 @@ def test_stack_rejects_sequence_with_template_but_no_protected_values(monkeypatc
 
 
 def test_plain_classes_require_custom_reconstruction():
-    class Plain(JaxAxisProtected[Any]):
+    class Plain(JaxAxisProtected):
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
         broadcasted_batch: ClassVar[set[str]] = {"array"}
 

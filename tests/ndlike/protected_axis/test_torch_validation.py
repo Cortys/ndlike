@@ -27,7 +27,7 @@ def test_torch_subclass_requires_non_empty_protected_axes() -> None:
     with pytest.raises(TypeError, match="must define protected_axes"):
 
         @dataclass(frozen=True, slots=True)
-        class _Empty(TorchAxisProtected[Any]):
+        class _Empty(TorchAxisProtected):
             tensor: torch.Tensor
             protected_axes: ClassVar[dict[str, int]] = {}
 
@@ -37,7 +37,7 @@ def test_torch_subclass_rejects_non_dict_protected_axes() -> None:
     with pytest.raises(TypeError, match="must define protected_axes"):
 
         @dataclass(frozen=True, slots=True)
-        class _NotDict(TorchAxisProtected[Any]):
+        class _NotDict(TorchAxisProtected):
             tensor: torch.Tensor
             protected_axes: ClassVar[Any] = ["tensor"]
 
@@ -47,7 +47,7 @@ def test_torch_subclass_rejects_empty_string_field_name() -> None:
     with pytest.raises(TypeError, match="non-empty string keys"):
 
         @dataclass(frozen=True, slots=True)
-        class _BadName(TorchAxisProtected[Any]):
+        class _BadName(TorchAxisProtected):
             tensor: torch.Tensor
             protected_axes: ClassVar[dict[str, int]] = {"": 1}
 
@@ -57,7 +57,7 @@ def test_torch_subclass_rejects_negative_axis_count() -> None:
     with pytest.raises(TypeError, match="must be a non-negative integer"):
 
         @dataclass(frozen=True, slots=True)
-        class _Negative(TorchAxisProtected[Any]):
+        class _Negative(TorchAxisProtected):
             tensor: torch.Tensor
             protected_axes: ClassVar[dict[str, int]] = {"tensor": -1}
 
@@ -67,7 +67,7 @@ def test_torch_subclass_rejects_non_int_axis_count() -> None:
     with pytest.raises(TypeError, match="must be a non-negative integer"):
 
         @dataclass(frozen=True, slots=True)
-        class _Fractional(TorchAxisProtected[Any]):
+        class _Fractional(TorchAxisProtected):
             tensor: torch.Tensor
             protected_axes: ClassVar[Any] = {"tensor": 1.5}
 
@@ -75,7 +75,7 @@ def test_torch_subclass_rejects_non_int_axis_count() -> None:
 def test_torch_subclass_accepts_unannotated_protected_field() -> None:
     """Protected fields may be provided by the instance without class annotations."""
 
-    class RuntimeField(TorchAxisProtected[torch.Tensor]):
+    class RuntimeField(TorchAxisProtected):
         protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
 
         def __init__(self, tensor: torch.Tensor) -> None:
@@ -92,7 +92,7 @@ def test_torch_subclass_accepts_inherited_protected_field(slots: bool) -> None:
     """Inherited dataclass fields support indexing without redeclaration."""
 
     @dataclass(frozen=True, slots=slots)
-    class Parent(TorchAxisProtected[torch.Tensor]):
+    class Parent(TorchAxisProtected):
         tensor: torch.Tensor
         protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
 
@@ -111,7 +111,7 @@ def test_torch_subclass_rejects_non_set_permitted_functions() -> None:
     with pytest.raises(TypeError, match="permitted_functions must be a set"):
 
         @dataclass(frozen=True, slots=True)
-        class _BadFuncs(TorchAxisProtected[Any]):
+        class _BadFuncs(TorchAxisProtected):
             tensor: torch.Tensor
             protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
             permitted_functions: ClassVar[Any] = [torch.mean]
@@ -122,7 +122,7 @@ def test_torch_subclass_rejects_non_callable_in_permitted_functions() -> None:
     with pytest.raises(TypeError, match="permitted_functions must be a set"):
 
         @dataclass(frozen=True, slots=True)
-        class _NonCallable(TorchAxisProtected[Any]):
+        class _NonCallable(TorchAxisProtected):
             tensor: torch.Tensor
             protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
             permitted_functions: ClassVar[set[Any]] = {"not-callable"}

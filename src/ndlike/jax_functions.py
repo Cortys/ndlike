@@ -12,11 +12,13 @@ Dispatch duck-types on ``__jax_function__`` being defined on the argument's *typ
 never imports :mod:`ndlike.jax_like` at runtime and the import graph stays one-way.
 
 The :func:`jax_function_dispatch` decorator selects operands by parameter name and preserves
-public signatures and documentation. A constrained type variable distinguishes native and
-custom array families without promising to preserve a concrete wrapper class. Custom arrays
-may become another JaxLike or a native array, for example when a sample axis is reduced away.
-The native family is the default for scalar and NumPy inputs. Arbitrary non-array overrides
+public signatures and documentation. Custom result types come from the operand's
+operation, comparison, or shape contract. Native, scalar, and NumPy inputs retain
+JAX's native array results. Arbitrary non-array overrides
 remain supported at runtime by the dispatch helpers, outside the wrappers' typed array contract.
+
+Native overloads precede generic dispatch overloads so a caller's expected return
+type cannot determine the result type when all dispatch operands are native.
 """
 
 from __future__ import annotations
@@ -29,22 +31,12 @@ import jax.numpy as jnp
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
-    import sys
 
     import jax
     from jax.sharding import Sharding
-    from jax.typing import ArrayLike as JaxArrayLike, DTypeLike
+    from jax.typing import ArrayLike as JTArrayLike, DTypeLike
 
-    from ndlike.jax_like import JaxLike
-
-    if sys.version_info >= (3, 13):
-        from typing import TypeVar
-    else:
-        from typing_extensions import TypeVar
-
-    # Equivalent to a PEP 695 constrained parameter, with a native default. The
-    # TypeVar spelling keeps defaults compatible with Python 3.12 (PEP 696 is 3.13+).
-    _JaxFamily = TypeVar("_JaxFamily", jax.Array, JaxLike[Any], default=jax.Array)
+    from ndlike.jax_like import AnyJaxLike, JaxLike
 
 
 class SupportsJaxFunction(Protocol):
@@ -66,7 +58,13 @@ class SupportsJaxFunction(Protocol):
         ...
 
 
-type JaxOperand = JaxArrayLike | SupportsJaxFunction
+if TYPE_CHECKING:
+
+    class _JaxReshapeLike[ResultT](JaxLike[Any, Any, Any, Any, ResultT, Any, Any], SupportsJaxFunction, Protocol):
+        """Custom dispatch is required for protected-axis shape placeholders."""
+
+
+type JaxOperand = JTArrayLike | SupportsJaxFunction
 
 
 class _SignaturePreservingDecorator(Protocol):
@@ -210,15 +208,31 @@ def try_jax_function(  # noqa: BKN001
     types = tuple(type(arg) for arg in overloaded)
 
     for arg in overloaded:
-        result = type(arg).__jax_function__(public_api, types, args, kwargs)  # ty: ignore[unresolved-attribute]
+        result = type(arg).__jax_function__(public_api, types, args, kwargs)  # ty: ignore[missing-attribute]
         if result is not NotImplemented:
             return result
 
     return NotImplemented
 
 
+@overload
+def jax_add(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_add[ValueT, ResultT](x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /) -> ResultT: ...
+
+
+@overload
+def jax_add[ValueT, ResultT](x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /) -> ResultT: ...
+
+
 @jax_function_dispatch("x1", "x2")
-def jax_add(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_add[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Add two operands elementwise, mirroring ``jax.numpy.add``.
 
     Args:
@@ -228,11 +242,27 @@ def jax_add(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> 
     Returns:
         The elementwise sum, or the result supplied by a custom override.
     """
-    return jnp.add(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.add(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_subtract(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_subtract[ValueT, ResultT](x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /) -> ResultT: ...
+
+
+@overload
+def jax_subtract[ValueT, ResultT](x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_subtract(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_subtract[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Subtract operands elementwise, mirroring ``jax.numpy.subtract``.
 
     Args:
@@ -242,11 +272,27 @@ def jax_subtract(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /
     Returns:
         ``x1 - x2`` elementwise, or the result supplied by a custom override.
     """
-    return jnp.subtract(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.subtract(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_multiply(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_multiply[ValueT, ResultT](x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /) -> ResultT: ...
+
+
+@overload
+def jax_multiply[ValueT, ResultT](x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_multiply(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_multiply[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Multiply operands elementwise, mirroring ``jax.numpy.multiply``.
 
     Args:
@@ -256,11 +302,31 @@ def jax_multiply(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /
     Returns:
         The elementwise product, or the result supplied by a custom override.
     """
-    return jnp.multiply(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.multiply(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_true_divide(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_true_divide[ValueT, ResultT](
+    x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /
+) -> ResultT: ...
+
+
+@overload
+def jax_true_divide[ValueT, ResultT](
+    x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_true_divide(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_true_divide[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Divide operands elementwise, mirroring ``jax.numpy.true_divide``.
 
     Args:
@@ -270,11 +336,31 @@ def jax_true_divide(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike
     Returns:
         The true quotient ``x1 / x2``, or a custom override result.
     """
-    return jnp.true_divide(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.true_divide(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_floor_divide(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_floor_divide[ValueT, ResultT](
+    x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /
+) -> ResultT: ...
+
+
+@overload
+def jax_floor_divide[ValueT, ResultT](
+    x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_floor_divide(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_floor_divide[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Floor-divide operands, mirroring ``jax.numpy.floor_divide``.
 
     Args:
@@ -284,11 +370,27 @@ def jax_floor_divide(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLik
     Returns:
         The quotient rounded toward negative infinity, or a custom override result.
     """
-    return jnp.floor_divide(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.floor_divide(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_remainder(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_remainder[ValueT, ResultT](x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /) -> ResultT: ...
+
+
+@overload
+def jax_remainder[ValueT, ResultT](x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_remainder(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_remainder[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Compute floor-division remainders, mirroring ``jax.numpy.remainder``.
 
     Args:
@@ -298,13 +400,31 @@ def jax_remainder(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, 
     Returns:
         The elementwise remainder, or the result supplied by a custom override.
     """
-    return jnp.remainder(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.remainder(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_divmod(
+    x1: JTArrayLike,
+    x2: JTArrayLike,
+    /,
+) -> tuple[jax.Array, jax.Array]: ...
+
+
+@overload
+def jax_divmod[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> tuple[ResultT, ResultT]: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_divmod(
-    x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /
-) -> tuple[jax.Array | _JaxFamily, jax.Array | _JaxFamily]:
+def jax_divmod[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> tuple[ResultT, ResultT]:
     """Compute quotients and remainders, mirroring ``jax.numpy.divmod``.
 
     Args:
@@ -315,11 +435,23 @@ def jax_divmod(
         A tuple of floor-division quotients and remainders for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.divmod(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("tuple[ResultT, ResultT]", jnp.divmod(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_frexp(x: JTArrayLike, /) -> tuple[jax.Array, jax.Array]: ...
+
+
+@overload
+def jax_frexp[ResultT = jax.Array](
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /
+) -> tuple[ResultT, ResultT]: ...
 
 
 @jax_function_dispatch("x")
-def jax_frexp(x: _JaxFamily | JaxArrayLike, /) -> tuple[jax.Array | _JaxFamily, jax.Array | _JaxFamily]:
+def jax_frexp[ResultT = jax.Array](
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /
+) -> tuple[ResultT, ResultT]:
     """Decompose values into mantissas and exponents, mirroring ``jax.numpy.frexp``.
 
     Args:
@@ -329,11 +461,23 @@ def jax_frexp(x: _JaxFamily | JaxArrayLike, /) -> tuple[jax.Array | _JaxFamily, 
         A tuple of floating-point mantissas and integer exponents for native
         inputs, or the result supplied by a custom override.
     """
-    return jnp.frexp(x)  # ty: ignore[invalid-argument-type]
+    return cast("tuple[ResultT, ResultT]", jnp.frexp(x))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_modf(x: JTArrayLike, /) -> tuple[jax.Array, jax.Array]: ...
+
+
+@overload
+def jax_modf[ResultT = jax.Array](
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /
+) -> tuple[ResultT, ResultT]: ...
 
 
 @jax_function_dispatch("x")
-def jax_modf(x: _JaxFamily | JaxArrayLike, /) -> tuple[jax.Array | _JaxFamily, jax.Array | _JaxFamily]:
+def jax_modf[ResultT = jax.Array](
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /
+) -> tuple[ResultT, ResultT]:
     """Split values into fractional and integral parts, mirroring ``jax.numpy.modf``.
 
     Args:
@@ -343,11 +487,27 @@ def jax_modf(x: _JaxFamily | JaxArrayLike, /) -> tuple[jax.Array | _JaxFamily, j
         A tuple of fractional and integral parts for native inputs, or the result
         supplied by a custom override.
     """
-    return jnp.modf(x)  # ty: ignore[invalid-argument-type]
+    return cast("tuple[ResultT, ResultT]", jnp.modf(x))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_power(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_power[ValueT, ResultT](x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /) -> ResultT: ...
+
+
+@overload
+def jax_power[ValueT, ResultT](x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_power(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_power[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Raise operands to powers elementwise, mirroring ``jax.numpy.power``.
 
     Args:
@@ -357,11 +517,27 @@ def jax_power(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -
     Returns:
         ``x1 ** x2`` elementwise, or the result supplied by a custom override.
     """
-    return jnp.power(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.power(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_matmul(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_matmul[ValueT, ResultT](x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /) -> ResultT: ...
+
+
+@overload
+def jax_matmul[ValueT, ResultT](x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_matmul(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_matmul[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Multiply matrices or vectors, mirroring ``jax.numpy.matmul``.
 
     Args:
@@ -372,11 +548,31 @@ def jax_matmul(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) 
         The matrix product with broadcast batch dimensions for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.matmul(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.matmul(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_bitwise_and(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_bitwise_and[ValueT, ResultT](
+    x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /
+) -> ResultT: ...
+
+
+@overload
+def jax_bitwise_and[ValueT, ResultT](
+    x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_bitwise_and(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_bitwise_and[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Compute bitwise AND, mirroring ``jax.numpy.bitwise_and``.
 
     Args:
@@ -386,11 +582,31 @@ def jax_bitwise_and(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike
     Returns:
         The elementwise bitwise AND, or a custom override result.
     """
-    return jnp.bitwise_and(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.bitwise_and(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_bitwise_or(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_bitwise_or[ValueT, ResultT](
+    x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /
+) -> ResultT: ...
+
+
+@overload
+def jax_bitwise_or[ValueT, ResultT](
+    x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_bitwise_or(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_bitwise_or[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Compute bitwise OR, mirroring ``jax.numpy.bitwise_or``.
 
     Args:
@@ -400,11 +616,31 @@ def jax_bitwise_or(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike,
     Returns:
         The elementwise bitwise OR, or a custom override result.
     """
-    return jnp.bitwise_or(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.bitwise_or(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_bitwise_xor(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_bitwise_xor[ValueT, ResultT](
+    x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /
+) -> ResultT: ...
+
+
+@overload
+def jax_bitwise_xor[ValueT, ResultT](
+    x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_bitwise_xor(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_bitwise_xor[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Compute bitwise exclusive OR, mirroring ``jax.numpy.bitwise_xor``.
 
     Args:
@@ -414,11 +650,31 @@ def jax_bitwise_xor(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike
     Returns:
         The elementwise bitwise exclusive OR, or a custom override result.
     """
-    return jnp.bitwise_xor(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.bitwise_xor(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_left_shift(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_left_shift[ValueT, ResultT](
+    x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /
+) -> ResultT: ...
+
+
+@overload
+def jax_left_shift[ValueT, ResultT](
+    x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_left_shift(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_left_shift[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Shift bits left elementwise, mirroring ``jax.numpy.left_shift``.
 
     Args:
@@ -428,11 +684,31 @@ def jax_left_shift(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike,
     Returns:
         The left-shifted values, or the result supplied by a custom override.
     """
-    return jnp.left_shift(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.left_shift(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_right_shift(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_right_shift[ValueT, ResultT](
+    x1: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], x2: ValueT, /
+) -> ResultT: ...
+
+
+@overload
+def jax_right_shift[ValueT, ResultT](
+    x1: ValueT, x2: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any], /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_right_shift(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_right_shift[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Shift bits right elementwise, mirroring ``jax.numpy.right_shift``.
 
     Args:
@@ -442,11 +718,27 @@ def jax_right_shift(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike
     Returns:
         The right-shifted values, or the result supplied by a custom override.
     """
-    return jnp.right_shift(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.right_shift(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_equal(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_equal[ValueT, ResultT](x1: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], x2: ValueT, /) -> ResultT: ...
+
+
+@overload
+def jax_equal[ValueT, ResultT](x1: ValueT, x2: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], /) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_equal[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Compare operands for equality, mirroring ``jax.numpy.equal``.
 
     Args:
@@ -457,11 +749,27 @@ def jax_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -
         An elementwise boolean equality array for native operands, or a custom
         override result. Protected-axis overrides return batch-shaped masks.
     """
-    return jnp.equal(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.equal(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_not_equal(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_not_equal[ValueT, ResultT](x1: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], x2: ValueT, /) -> ResultT: ...
+
+
+@overload
+def jax_not_equal[ValueT, ResultT](x1: ValueT, x2: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], /) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_not_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_not_equal[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Compare operands for inequality, mirroring ``jax.numpy.not_equal``.
 
     Args:
@@ -472,11 +780,27 @@ def jax_not_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, 
         An elementwise boolean inequality array for native operands, or a custom
         override result. Protected-axis overrides return batch-shaped masks.
     """
-    return jnp.not_equal(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.not_equal(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_less(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_less[ValueT, ResultT](x1: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], x2: ValueT, /) -> ResultT: ...
+
+
+@overload
+def jax_less[ValueT, ResultT](x1: ValueT, x2: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], /) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_less(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_less[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Test whether the left operand is smaller, mirroring ``jax.numpy.less``.
 
     Args:
@@ -487,11 +811,31 @@ def jax_less(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) ->
         The elementwise boolean result of ``x1 < x2`` for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.less(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.less(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_less_equal(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_less_equal[ValueT, ResultT](
+    x1: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], x2: ValueT, /
+) -> ResultT: ...
+
+
+@overload
+def jax_less_equal[ValueT, ResultT](
+    x1: ValueT, x2: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_less_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_less_equal[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Test the less-than-or-equal relation, mirroring ``jax.numpy.less_equal``.
 
     Args:
@@ -502,11 +846,27 @@ def jax_less_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike,
         The elementwise boolean result of ``x1 <= x2`` for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.less_equal(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.less_equal(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_greater(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_greater[ValueT, ResultT](x1: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], x2: ValueT, /) -> ResultT: ...
+
+
+@overload
+def jax_greater[ValueT, ResultT](x1: ValueT, x2: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], /) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_greater(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_greater[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Test whether the left operand is larger, mirroring ``jax.numpy.greater``.
 
     Args:
@@ -517,11 +877,31 @@ def jax_greater(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /)
         The elementwise boolean result of ``x1 > x2`` for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.greater(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.greater(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_greater_equal(x1: JTArrayLike, x2: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_greater_equal[ValueT, ResultT](
+    x1: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], x2: ValueT, /
+) -> ResultT: ...
+
+
+@overload
+def jax_greater_equal[ValueT, ResultT](
+    x1: ValueT, x2: JaxLike[Any, ValueT, Any, Any, Any, ResultT, Any], /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x1", "x2")
-def jax_greater_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_greater_equal[ResultT = jax.Array](
+    x1: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    x2: JaxLike[Any, Any, Any, Any, Any, ResultT, Any] | JTArrayLike,
+    /,
+) -> ResultT:
     """Test the greater-than-or-equal relation, mirroring ``jax.numpy.greater_equal``.
 
     Args:
@@ -532,11 +912,21 @@ def jax_greater_equal(x1: _JaxFamily | JaxArrayLike, x2: _JaxFamily | JaxArrayLi
         The elementwise boolean result of ``x1 >= x2`` for native operands,
         or the result supplied by a custom override.
     """
-    return jnp.greater_equal(x1, x2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.greater_equal(x1, x2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_positive(x: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_positive[ResultT = jax.Array](
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x")
-def jax_positive(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_positive[ResultT = jax.Array](x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /) -> ResultT:
     """Apply unary positive, mirroring ``jax.numpy.positive``.
 
     Args:
@@ -545,11 +935,21 @@ def jax_positive(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     Returns:
         The positive array, or the result supplied by a custom override.
     """
-    return jnp.positive(x)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.positive(x))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_negative(x: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_negative[ResultT = jax.Array](
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x")
-def jax_negative(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_negative[ResultT = jax.Array](x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /) -> ResultT:
     """Negate an operand elementwise, mirroring ``jax.numpy.negative``.
 
     Args:
@@ -558,11 +958,21 @@ def jax_negative(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     Returns:
         The elementwise negation, or the result supplied by a custom override.
     """
-    return jnp.negative(x)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.negative(x))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_absolute(x: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_absolute[ResultT = jax.Array](
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x")
-def jax_absolute(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_absolute[ResultT = jax.Array](x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /) -> ResultT:
     """Compute absolute values elementwise, mirroring ``jax.numpy.absolute``.
 
     Args:
@@ -571,11 +981,19 @@ def jax_absolute(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     Returns:
         The elementwise magnitudes, or the result supplied by a custom override.
     """
-    return jnp.absolute(x)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.absolute(x))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_invert(x: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_invert[ResultT = jax.Array](x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /) -> ResultT: ...
 
 
 @jax_function_dispatch("x")
-def jax_invert(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_invert[ResultT = jax.Array](x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /) -> ResultT:
     """Invert bits elementwise, mirroring ``jax.numpy.invert``.
 
     Args:
@@ -584,11 +1002,23 @@ def jax_invert(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     Returns:
         The bitwise complement, or the result supplied by a custom override.
     """
-    return jnp.invert(x)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.invert(x))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_broadcast_to(array: JTArrayLike, shape: Sequence[int]) -> jax.Array: ...
+
+
+@overload
+def jax_broadcast_to[ResultT = jax.Array](
+    array: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, shape: Sequence[int]
+) -> ResultT: ...
 
 
 @jax_function_dispatch("array")
-def jax_broadcast_to(array: _JaxFamily | JaxArrayLike, shape: Sequence[int]) -> jax.Array | _JaxFamily:
+def jax_broadcast_to[ResultT = jax.Array](
+    array: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, shape: Sequence[int]
+) -> ResultT:
     """Broadcast an array to a shape, preserving custom array dispatch.
 
     Args:
@@ -598,12 +1028,12 @@ def jax_broadcast_to(array: _JaxFamily | JaxArrayLike, shape: Sequence[int]) -> 
     Returns:
         The broadcasted array, or the result supplied by a custom override.
     """
-    return jnp.broadcast_to(array, shape)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.broadcast_to(array, shape))  # ty: ignore[invalid-argument-type]
 
 
 @overload
 def jax_reshape(
-    a: JaxArrayLike,
+    a: JTArrayLike,
     /,
     shape: int | Sequence[int],
     order: str = "C",
@@ -613,25 +1043,36 @@ def jax_reshape(
 
 
 @overload
-def jax_reshape(
-    a: JaxLike[Any],
+def jax_reshape[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
     /,
-    shape: int | Sequence[int | None],
+    shape: int | Sequence[int],
     order: str = "C",
     *,
     copy: bool | None = None,
-) -> jax.Array | JaxLike[Any]: ...
+) -> ResultT: ...
+
+
+@overload
+def jax_reshape[ResultT](
+    a: _JaxReshapeLike[ResultT],
+    /,
+    shape: Sequence[int | None],
+    order: str = "C",
+    *,
+    copy: bool | None = None,
+) -> ResultT: ...
 
 
 @jax_function_dispatch("a")
-def jax_reshape(
-    a: _JaxFamily | JaxArrayLike,
+def jax_reshape[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
     /,
     shape: int | Sequence[int | None],
     order: str = "C",
     *,
     copy: bool | None = None,
-) -> jax.Array | _JaxFamily:
+) -> ResultT:
     """Return a reshaped version of the array, mirroring ``jax.numpy.reshape``.
 
     Args:
@@ -643,11 +1084,23 @@ def jax_reshape(
     Returns:
         The reshaped array.
     """
-    return jnp.reshape(a, shape, order, copy=copy)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.reshape(a, shape, order, copy=copy))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_transpose(a: JTArrayLike, /, axes: Sequence[int] | None = None) -> jax.Array: ...
+
+
+@overload
+def jax_transpose[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axes: Sequence[int] | None = None
+) -> ResultT: ...
 
 
 @jax_function_dispatch("a")
-def jax_transpose(a: _JaxFamily | JaxArrayLike, /, axes: Sequence[int] | None = None) -> jax.Array | _JaxFamily:
+def jax_transpose[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axes: Sequence[int] | None = None
+) -> ResultT:
     """Return a transposed version of the array, mirroring ``jax.numpy.transpose``.
 
     Args:
@@ -657,11 +1110,23 @@ def jax_transpose(a: _JaxFamily | JaxArrayLike, /, axes: Sequence[int] | None = 
     Returns:
         The transposed array.
     """
-    return jnp.transpose(a, axes)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.transpose(a, axes))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_matrix_transpose(x: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_matrix_transpose[ResultT = jax.Array](
+    x: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /
+) -> ResultT: ...
 
 
 @jax_function_dispatch("x")
-def jax_matrix_transpose(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_matrix_transpose[ResultT = jax.Array](
+    x: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /
+) -> ResultT:
     """Transpose the last two axes of the array, mirroring ``jax.numpy.matrix_transpose``.
 
     Args:
@@ -670,16 +1135,34 @@ def jax_matrix_transpose(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFam
     Returns:
         The array with its last two axes swapped.
     """
-    return jnp.matrix_transpose(x)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.matrix_transpose(x))  # ty: ignore[invalid-argument-type]
 
 
-@jax_function_dispatch("a")
+@overload
 def jax_moveaxis(
-    a: _JaxFamily | JaxArrayLike,
+    a: JTArrayLike,
     /,
     source: int | Sequence[int],
     destination: int | Sequence[int],
-) -> jax.Array | _JaxFamily:
+) -> jax.Array: ...
+
+
+@overload
+def jax_moveaxis[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
+    /,
+    source: int | Sequence[int],
+    destination: int | Sequence[int],
+) -> ResultT: ...
+
+
+@jax_function_dispatch("a")
+def jax_moveaxis[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
+    /,
+    source: int | Sequence[int],
+    destination: int | Sequence[int],
+) -> ResultT:
     """Move axes of the array to new positions, mirroring ``jax.numpy.moveaxis``.
 
     Args:
@@ -690,11 +1173,23 @@ def jax_moveaxis(
     Returns:
         The array with the axes moved.
     """
-    return jnp.moveaxis(a, source, destination)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.moveaxis(a, source, destination))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_swapaxes(a: JTArrayLike, /, axis1: int, axis2: int) -> jax.Array: ...
+
+
+@overload
+def jax_swapaxes[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axis1: int, axis2: int
+) -> ResultT: ...
 
 
 @jax_function_dispatch("a")
-def jax_swapaxes(a: _JaxFamily | JaxArrayLike, /, axis1: int, axis2: int) -> jax.Array | _JaxFamily:
+def jax_swapaxes[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axis1: int, axis2: int
+) -> ResultT:
     """Swap two axes of the array, mirroring ``jax.numpy.swapaxes``.
 
     Args:
@@ -705,11 +1200,23 @@ def jax_swapaxes(a: _JaxFamily | JaxArrayLike, /, axis1: int, axis2: int) -> jax
     Returns:
         The array with the two axes swapped.
     """
-    return jnp.swapaxes(a, axis1, axis2)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.swapaxes(a, axis1, axis2))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_squeeze(a: JTArrayLike, /, axis: int | Sequence[int] | None = None) -> jax.Array: ...
+
+
+@overload
+def jax_squeeze[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axis: int | Sequence[int] | None = None
+) -> ResultT: ...
 
 
 @jax_function_dispatch("a")
-def jax_squeeze(a: _JaxFamily | JaxArrayLike, /, axis: int | Sequence[int] | None = None) -> jax.Array | _JaxFamily:
+def jax_squeeze[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axis: int | Sequence[int] | None = None
+) -> ResultT:
     """Remove axes of length one, mirroring ``jax.numpy.squeeze``.
 
     Args:
@@ -719,11 +1226,23 @@ def jax_squeeze(a: _JaxFamily | JaxArrayLike, /, axis: int | Sequence[int] | Non
     Returns:
         The squeezed array.
     """
-    return jnp.squeeze(a, axis)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.squeeze(a, axis))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_expand_dims(a: JTArrayLike, /, axis: int | Sequence[int]) -> jax.Array: ...
+
+
+@overload
+def jax_expand_dims[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axis: int | Sequence[int]
+) -> ResultT: ...
 
 
 @jax_function_dispatch("a")
-def jax_expand_dims(a: _JaxFamily | JaxArrayLike, /, axis: int | Sequence[int]) -> jax.Array | _JaxFamily:
+def jax_expand_dims[ResultT = jax.Array](
+    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axis: int | Sequence[int]
+) -> ResultT:
     """Insert axes of length one, mirroring ``jax.numpy.expand_dims``.
 
     Args:
@@ -733,16 +1252,34 @@ def jax_expand_dims(a: _JaxFamily | JaxArrayLike, /, axis: int | Sequence[int]) 
     Returns:
         The expanded array.
     """
-    return jnp.expand_dims(a, axis)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.expand_dims(a, axis))  # ty: ignore[invalid-argument-type]
 
 
-@jax_function_dispatch(unpack=("arrays",))
+@overload
 def jax_concatenate(
-    arrays: Sequence[_JaxFamily | JaxArrayLike],
+    arrays: Sequence[JTArrayLike],
     /,
     axis: int | None = 0,
     dtype: DTypeLike | None = None,
-) -> jax.Array | _JaxFamily:
+) -> jax.Array: ...
+
+
+@overload
+def jax_concatenate[ResultT = jax.Array](
+    arrays: Sequence[JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike],
+    /,
+    axis: int | None = 0,
+    dtype: DTypeLike | None = None,
+) -> ResultT: ...
+
+
+@jax_function_dispatch(unpack=("arrays",))
+def jax_concatenate[ResultT = jax.Array](
+    arrays: Sequence[JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike],
+    /,
+    axis: int | None = 0,
+    dtype: DTypeLike | None = None,
+) -> ResultT:
     """Join a sequence of arrays along an existing axis, mirroring ``jax.numpy.concatenate``.
 
     Args:
@@ -753,17 +1290,37 @@ def jax_concatenate(
     Returns:
         The concatenated array.
     """
-    return jnp.concatenate(arrays, axis, dtype=dtype)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.concatenate(arrays, axis, dtype=dtype))  # ty: ignore[invalid-argument-type]
 
 
-@jax_function_dispatch(unpack=("arrays",))
+@overload
 def jax_stack(
-    arrays: Sequence[_JaxFamily | JaxArrayLike],
+    arrays: Sequence[JTArrayLike],
     /,
     axis: int = 0,
     out: None = None,
     dtype: DTypeLike | None = None,
-) -> jax.Array | _JaxFamily:
+) -> jax.Array: ...
+
+
+@overload
+def jax_stack[ResultT = jax.Array](
+    arrays: Sequence[JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike],
+    /,
+    axis: int = 0,
+    out: None = None,
+    dtype: DTypeLike | None = None,
+) -> ResultT: ...
+
+
+@jax_function_dispatch(unpack=("arrays",))
+def jax_stack[ResultT = jax.Array](
+    arrays: Sequence[JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike],
+    /,
+    axis: int = 0,
+    out: None = None,
+    dtype: DTypeLike | None = None,
+) -> ResultT:
     """Join a sequence of arrays along a new axis, mirroring ``jax.numpy.stack``.
 
     Args:
@@ -775,18 +1332,40 @@ def jax_stack(
     Returns:
         The stacked array.
     """
-    return jnp.stack(arrays, axis, out, dtype=dtype)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.stack(arrays, axis, out, dtype=dtype))  # ty: ignore[invalid-argument-type]
 
 
-@jax_function_dispatch("arr", "indices")
+@overload
 def jax_take_along_axis(
-    arr: _JaxFamily | JaxArrayLike,
+    arr: JTArrayLike,
     /,
-    indices: _JaxFamily | JaxArrayLike,
+    indices: JTArrayLike,
     axis: int | None = -1,
     mode: str | None = None,
     fill_value: Any = None,  # noqa: ANN401
-) -> jax.Array | _JaxFamily:
+) -> jax.Array: ...
+
+
+@overload
+def jax_take_along_axis[ResultT = jax.Array](
+    arr: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
+    /,
+    indices: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
+    axis: int | None = -1,
+    mode: str | None = None,
+    fill_value: Any = None,  # noqa: ANN401
+) -> ResultT: ...
+
+
+@jax_function_dispatch("arr", "indices")
+def jax_take_along_axis[ResultT = jax.Array](
+    arr: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
+    /,
+    indices: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
+    axis: int | None = -1,
+    mode: str | None = None,
+    fill_value: Any = None,
+) -> ResultT:
     """Take values along an axis, mirroring ``jax.numpy.take_along_axis``.
 
     Args:
@@ -799,11 +1378,19 @@ def jax_take_along_axis(
     Returns:
         The gathered array.
     """
-    return jnp.take_along_axis(arr, indices, axis, mode=mode, fill_value=fill_value)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.take_along_axis(arr, indices, axis, mode=mode, fill_value=fill_value))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_conj(x: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_conj[ResultT = jax.Array](x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /) -> ResultT: ...
 
 
 @jax_function_dispatch("x")
-def jax_conj(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
+def jax_conj[ResultT = jax.Array](x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike, /) -> ResultT:
     """Return the complex conjugate of the array, mirroring ``jax.numpy.conj``.
 
     Args:
@@ -812,11 +1399,23 @@ def jax_conj(x: _JaxFamily | JaxArrayLike, /) -> jax.Array | _JaxFamily:
     Returns:
         The conjugated array.
     """
-    return jnp.conj(x)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.conj(x))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_copy(a: JTArrayLike, /, order: str | None = None) -> jax.Array: ...
+
+
+@overload
+def jax_copy[OwnerT: AnyJaxLike = jax.Array](
+    a: JaxLike[OwnerT, Any, Any, Any, Any, Any, Any] | JTArrayLike, /, order: str | None = None
+) -> OwnerT: ...
 
 
 @jax_function_dispatch("a")
-def jax_copy(a: _JaxFamily | JaxArrayLike, /, order: str | None = None) -> jax.Array | _JaxFamily:
+def jax_copy[OwnerT: AnyJaxLike = jax.Array](
+    a: JaxLike[OwnerT, Any, Any, Any, Any, Any, Any] | JTArrayLike, /, order: str | None = None
+) -> OwnerT:
     """Return a copy of the array, mirroring ``jax.numpy.copy``.
 
     Args:
@@ -826,18 +1425,40 @@ def jax_copy(a: _JaxFamily | JaxArrayLike, /, order: str | None = None) -> jax.A
     Returns:
         The copied array.
     """
-    return jnp.copy(a, order)  # ty: ignore[invalid-argument-type]
+    return cast("OwnerT", jnp.copy(a, order))  # ty: ignore[invalid-argument-type]
 
 
-@jax_function_dispatch("x")
+@overload
 def jax_astype(
-    x: _JaxFamily | JaxArrayLike,
+    x: JTArrayLike,
     /,
     dtype: DTypeLike | None,
     *,
     copy: bool = False,
     device: jax.Device | Sharding | None = None,
-) -> jax.Array | _JaxFamily:
+) -> jax.Array: ...
+
+
+@overload
+def jax_astype[ResultT = jax.Array](
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    dtype: DTypeLike | None,
+    *,
+    copy: bool = False,
+    device: jax.Device | Sharding | None = None,
+) -> ResultT: ...
+
+
+@jax_function_dispatch("x")
+def jax_astype[ResultT = jax.Array](
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    dtype: DTypeLike | None,
+    *,
+    copy: bool = False,
+    device: jax.Device | Sharding | None = None,
+) -> ResultT:
     """Cast the array to a new data type, mirroring ``jax.numpy.astype``.
 
     Args:
@@ -849,20 +1470,46 @@ def jax_astype(
     Returns:
         The cast array.
     """
-    return jnp.astype(x, dtype, copy=copy, device=device)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.astype(x, dtype, copy=copy, device=device))  # ty: ignore[invalid-argument-type]
 
 
-@jax_function_dispatch("a", "where")
+@overload
 def jax_mean(
-    a: _JaxFamily | JaxArrayLike,
+    a: JTArrayLike,
     /,
     axis: int | Sequence[int] | None = None,
     dtype: DTypeLike | None = None,
     out: None = None,
     keepdims: bool = False,
     *,
-    where: _JaxFamily | JaxArrayLike | None = None,
-) -> jax.Array | _JaxFamily:
+    where: JTArrayLike | None = None,
+) -> jax.Array: ...
+
+
+@overload
+def jax_mean[ResultT = jax.Array](
+    a: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    axis: int | Sequence[int] | None = None,
+    dtype: DTypeLike | None = None,
+    out: None = None,
+    keepdims: bool = False,
+    *,
+    where: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+) -> ResultT: ...
+
+
+@jax_function_dispatch("a", "where")
+def jax_mean[ResultT = jax.Array](
+    a: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    axis: int | Sequence[int] | None = None,
+    dtype: DTypeLike | None = None,
+    out: None = None,
+    keepdims: bool = False,
+    *,
+    where: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+) -> ResultT:
     """Compute the arithmetic mean, mirroring ``jax.numpy.mean``.
 
     Args:
@@ -876,20 +1523,46 @@ def jax_mean(
     Returns:
         The mean of the array.
     """
-    return jnp.mean(a, axis, dtype, out, keepdims, where=where)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.mean(a, axis, dtype, out, keepdims, where=where))  # ty: ignore[invalid-argument-type]
 
 
-@jax_function_dispatch("a", "initial", "where")
+@overload
 def jax_sum(
-    a: _JaxFamily | JaxArrayLike,
+    a: JTArrayLike,
     /,
     axis: int | Sequence[int] | None = None,
     dtype: DTypeLike | None = None,
     out: None = None,
     keepdims: bool = False,
-    initial: _JaxFamily | JaxArrayLike | None = None,
-    where: _JaxFamily | JaxArrayLike | None = None,
-) -> jax.Array | _JaxFamily:
+    initial: JTArrayLike | None = None,
+    where: JTArrayLike | None = None,
+) -> jax.Array: ...
+
+
+@overload
+def jax_sum[ResultT = jax.Array](
+    a: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    axis: int | Sequence[int] | None = None,
+    dtype: DTypeLike | None = None,
+    out: None = None,
+    keepdims: bool = False,
+    initial: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+    where: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+) -> ResultT: ...
+
+
+@jax_function_dispatch("a", "initial", "where")
+def jax_sum[ResultT = jax.Array](
+    a: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    axis: int | Sequence[int] | None = None,
+    dtype: DTypeLike | None = None,
+    out: None = None,
+    keepdims: bool = False,
+    initial: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+    where: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+) -> ResultT:
     """Compute the sum, mirroring ``jax.numpy.sum``.
 
     Args:
@@ -904,12 +1577,12 @@ def jax_sum(
     Returns:
         The sum of the array.
     """
-    return jnp.sum(a, axis, dtype, out, keepdims, initial, where)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.sum(a, axis, dtype, out, keepdims, initial, where))  # ty: ignore[invalid-argument-type]
 
 
-@jax_function_dispatch("a", "where")
+@overload
 def jax_std(
-    a: _JaxFamily | JaxArrayLike,
+    a: JTArrayLike,
     /,
     axis: int | Sequence[int] | None = None,
     dtype: DTypeLike | None = None,
@@ -917,8 +1590,36 @@ def jax_std(
     ddof: int = 0,
     keepdims: bool = False,
     *,
-    where: _JaxFamily | JaxArrayLike | None = None,
-) -> jax.Array | _JaxFamily:
+    where: JTArrayLike | None = None,
+) -> jax.Array: ...
+
+
+@overload
+def jax_std[ResultT = jax.Array](
+    a: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    axis: int | Sequence[int] | None = None,
+    dtype: DTypeLike | None = None,
+    out: None = None,
+    ddof: int = 0,
+    keepdims: bool = False,
+    *,
+    where: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+) -> ResultT: ...
+
+
+@jax_function_dispatch("a", "where")
+def jax_std[ResultT = jax.Array](
+    a: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    axis: int | Sequence[int] | None = None,
+    dtype: DTypeLike | None = None,
+    out: None = None,
+    ddof: int = 0,
+    keepdims: bool = False,
+    *,
+    where: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+) -> ResultT:
     """Compute the standard deviation, mirroring ``jax.numpy.std``.
 
     Args:
@@ -933,12 +1634,12 @@ def jax_std(
     Returns:
         The standard deviation of the array.
     """
-    return jnp.std(a, axis, dtype, out, ddof, keepdims, where=where)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.std(a, axis, dtype, out, ddof, keepdims, where=where))  # ty: ignore[invalid-argument-type]
 
 
-@jax_function_dispatch("a", "where")
+@overload
 def jax_var(
-    a: _JaxFamily | JaxArrayLike,
+    a: JTArrayLike,
     /,
     axis: int | Sequence[int] | None = None,
     dtype: DTypeLike | None = None,
@@ -946,8 +1647,36 @@ def jax_var(
     ddof: int = 0,
     keepdims: bool = False,
     *,
-    where: _JaxFamily | JaxArrayLike | None = None,
-) -> jax.Array | _JaxFamily:
+    where: JTArrayLike | None = None,
+) -> jax.Array: ...
+
+
+@overload
+def jax_var[ResultT = jax.Array](
+    a: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    axis: int | Sequence[int] | None = None,
+    dtype: DTypeLike | None = None,
+    out: None = None,
+    ddof: int = 0,
+    keepdims: bool = False,
+    *,
+    where: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+) -> ResultT: ...
+
+
+@jax_function_dispatch("a", "where")
+def jax_var[ResultT = jax.Array](
+    a: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    axis: int | Sequence[int] | None = None,
+    dtype: DTypeLike | None = None,
+    out: None = None,
+    ddof: int = 0,
+    keepdims: bool = False,
+    *,
+    where: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+) -> ResultT:
     """Compute the variance, mirroring ``jax.numpy.var``.
 
     Args:
@@ -962,18 +1691,40 @@ def jax_var(
     Returns:
         The variance of the array.
     """
-    return jnp.var(a, axis, dtype, out, ddof, keepdims, where=where)  # ty: ignore[invalid-argument-type]
+    return cast("ResultT", jnp.var(a, axis, dtype, out, ddof, keepdims, where=where))  # ty: ignore[invalid-argument-type]
+
+
+@overload
+def jax_average(
+    a: JTArrayLike,
+    /,
+    axis: int | Sequence[int] | None = None,
+    weights: JTArrayLike | None = None,
+    returned: bool = False,
+    keepdims: bool = False,
+) -> jax.Array | tuple[jax.Array, jax.Array]: ...
+
+
+@overload
+def jax_average[ResultT = jax.Array](
+    a: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    /,
+    axis: int | Sequence[int] | None = None,
+    weights: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
+    returned: bool = False,
+    keepdims: bool = False,
+) -> ResultT | tuple[ResultT, ResultT]: ...
 
 
 @jax_function_dispatch("a", "weights")
-def jax_average(
-    a: _JaxFamily | JaxArrayLike,
+def jax_average[ResultT = jax.Array](
+    a: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
     /,
     axis: int | Sequence[int] | None = None,
-    weights: _JaxFamily | JaxArrayLike | None = None,
+    weights: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike | None = None,
     returned: bool = False,
     keepdims: bool = False,
-) -> jax.Array | _JaxFamily | tuple[jax.Array | _JaxFamily, jax.Array | _JaxFamily]:
+) -> ResultT | tuple[ResultT, ResultT]:
     """Compute a possibly weighted average, mirroring ``jax.numpy.average``.
 
     Args:

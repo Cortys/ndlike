@@ -6,13 +6,28 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Sequence
 import math
 from types import EllipsisType, ModuleType
-from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, SupportsIndex, override, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Literal,
+    Never,
+    Protocol,
+    Self,
+    SupportsIndex,
+    cast,
+    overload,
+    override,
+    runtime_checkable,
+)
 
 from flextype import flexdispatch
 import numpy as np
+from numpy.typing import NDArray
+
+from ndlike._operators import ArrayOperators, InplaceArrayOperators, NumpyOperatorsMixin
 
 if TYPE_CHECKING:
-    from numpy.typing import ArrayLike as NpArrayLike, DTypeLike, NDArray
+    from numpy.typing import DTypeLike
 
 
 @runtime_checkable
@@ -119,11 +134,23 @@ class ArrayFlagsLike(Protocol):
 
 
 @runtime_checkable
-class ArrayLikeWithoutSize[DT](Protocol):
+class WeakArrayLike[
+    OwnerT: WeakArrayLike[Any, Any, Any, Any, Any, Any, Any] = WeakArrayLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = WeakArrayLike[Any, Any, Any, Never, Any, Any, Any],
+    SetResultT = OwnerT,
+](Protocol):
     """Core array protocol shared by NumPy, JAX, and PyTorch.
 
-    This protocol omits ``size`` because PyTorch exposes it as a method rather than
-    the integer element-count property used by NumPy and JAX.
+    This protocol omits the integer ``size`` property, ``__array_namespace__`` and
+    ``to_device``, which PyTorch does not expose. Assignment accepts ``Self`` plus
+    the additional values described by ``SetValueT``, which defaults to ``Never``
+    (no additional types). Index types are backend-specific.
+    A matching array may still reject an operation, such as item assignment on
+    immutable JAX arrays.
 
     Unlike `numpy.typing.ArrayLike`, this protocol does not only check
     whether an object can be converted to a numpy array, but rather
@@ -132,20 +159,39 @@ class ArrayLikeWithoutSize[DT](Protocol):
     Unlike the official standard, this protocol does not require support for all numerical operations.
     """
 
-    def __array__(self, dtype: DTypeLike | None = None, /, *, copy: bool | None = None) -> np.ndarray:
-        """Convert to a numpy array."""
+    if not TYPE_CHECKING:
 
-    def __getitem__(self, index: ToIndices, /) -> Any:  # noqa: ANN401
-        """Return values selected by index."""
+        def __class_getitem__(cls, arguments: object) -> Any:  # noqa: ANN401
+            """Substitute dependent defaults before constructing a generic alias."""
+            # CPython does not substitute a preceding TypeVar used as a default.
+            # Fill those defaults before Generic collects subclass parameters.
+            args = list(arguments if isinstance(arguments, tuple) else (arguments,))
+            parameters = cls.__parameters__
+            for parameter in parameters[len(args) :]:
+                if not parameter.has_default():
+                    break
+                default = parameter.__default__
+                for index, preceding in enumerate(parameters[: len(args)]):
+                    if default is preceding:
+                        default = args[index]
+                        break
+                args.append(default)
+            return super().__class_getitem__(tuple(args))
 
-    def __setitem__(self, index: ToIndices, value: NpArrayLike, /) -> None:
-        """Set values selected by index."""
+    @overload
+    def __array__(self, dtype: None = None, /) -> np.ndarray: ...
 
-    def __array_namespace__(self, /, *, api_version: ArrayAPIVersion | None = None) -> ModuleType:
-        """Return the namespace of the array, e.g. 'numpy' or 'torch'."""
+    @overload
+    def __array__(self, dtype: np.dtype, /) -> np.ndarray: ...
 
-    def to_device(self, device: Literal["cpu"], /, *, stream: int | Any | None = None) -> Self:  # noqa: ANN401
-        """Move the array to a device."""
+    def __array__(self, dtype: np.dtype | None = None, /) -> np.ndarray:
+        """Convert to a NumPy array using an optional dtype object."""
+
+    def __getitem__(self, index: Any, /) -> ShapeResultT:  # noqa: ANN401
+        """Return values selected by a backend-supported index."""
+
+    def __setitem__(self, index: Any, value: Self | SetValueT, /) -> None:  # noqa: ANN401
+        """Assign a backend-supported value, if the array permits mutation."""
 
     @property
     def ndim(self) -> int:
@@ -164,30 +210,70 @@ class ArrayLikeWithoutSize[DT](Protocol):
         """Device of the array."""
 
     @property
-    def T(self) -> Any:  # noqa: ANN401, N802
+    def T(self) -> ShapeResultT:  # noqa: N802
         """Transposed array."""
 
     @property
-    def mT(self) -> Any:  # noqa: ANN401, N802
+    def mT(self) -> ShapeResultT:  # noqa: N802
         """Matrix transposed array."""
 
     def __len__(self) -> int:
         """Length along the first axis."""
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[ShapeResultT]:
         """Iterator over the first axis."""
 
 
 @runtime_checkable
-class ArrayLike[DT](ArrayLikeWithoutSize[DT], Protocol):
-    """Core array protocol extended with an integer element-count property.
+class ArrayLike[
+    OwnerT: ArrayLike[Any, Any, Any, Any, Any, Any, Any] = ArrayLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = WeakArrayLike[Any, Any, Any, Never, Any, Any, Any],
+    SetResultT = OwnerT,
+](
+    WeakArrayLike[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
+    Protocol,
+):
+    """NumPy/JAX array protocol with an integer element-count property.
 
-    Unlike `numpy.typing.ArrayLike`, this protocol does not only check
-    whether an object can be converted to a numpy array, but rather
-    whether it supports core indexing and shape/metadata operations similar to a numpy array.
-    This protocol is based in the Python array API standard: https://data-apis.org/array-api
-    Unlike the official standard, this protocol does not require support for all numerical operations.
+    Adds namespace access, device transfer and copy-aware NumPy conversion to the
+    shared core. Device types are backend-specific: NumPy accepts ``"cpu"``, while
+    JAX accepts a device or sharding object.
+
+    Parameters are ``OwnerT``, ``OpValueT``, ``OpResultT``, ``SetValueT``,
+    ``ShapeResultT``, ``CompResultT``, and ``SetResultT``. Operands and value,
+    shape/indexing, and functional-update results default to the owner type. Explicit
+    result arguments replace that default. Copies return OwnerT; iteration yields
+    ShapeResultT. Comparisons default to WeakArrayLike.
+    Assignment accepts ``Self | SetValueT``; ``SetValueT`` defaults to Never.
+    The owner defaults to a broad ArrayLike and must satisfy the array protocol.
+    Numerical operators are required only by the backend-specific protocols.
+    Those protocols restrict owners and comparison defaults to their backend.
     """
+
+    @overload
+    def __array__(self, dtype: None = None, /, *, copy: bool | None = None) -> np.ndarray: ...
+
+    @overload
+    def __array__(self, dtype: np.dtype, /, *, copy: bool | None = None) -> np.ndarray: ...
+
+    def __array__(self, dtype: np.dtype | None = None, /, *, copy: bool | None = None) -> np.ndarray:
+        """Convert to a NumPy array using an optional dtype object and copy policy."""
+
+    def __array_namespace__(self, /, *, api_version: ArrayAPIVersion | None = None) -> ModuleType:
+        """Return the array namespace."""
+
+    def to_device(self, device: Any, /, *, stream: int | Any | None = None) -> Self:  # noqa: ANN401
+        """Move the array to a backend-supported device."""
+
+    def __getitem__(self, index: ToIndices, /) -> ShapeResultT:
+        """Return values selected by a NumPy-style index."""
+
+    def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:
+        """Assign values, if the array permits mutation."""
 
     @property
     def size(self) -> int:
@@ -195,16 +281,38 @@ class ArrayLike[DT](ArrayLikeWithoutSize[DT], Protocol):
 
 
 @runtime_checkable
-class NumpyLikeConvertible[DT](ArrayLike[DT], Protocol):
+class NumpyLikeConvertible[SetValueT = Never](ArrayLike[Any, Any, Any, SetValueT], Protocol):
     """Protocol for array-like objects that can be converted to numpy arrays."""
 
     def __array_like__(self, dtype: DTypeLike | None = None, /, *, copy: bool | None = None) -> NumpyLike[Any]:
         """Convert to a NumpyLike."""
 
 
+type AnyNumpyLike = NumpyLike[Any, Any, Any, Any, Any, Any, Any]  # noqa: BKN001 - broad backend protocol alias
+
+
 @runtime_checkable
-class NumpyLike[DT](ArrayLike[DT], Protocol):
+class NumpyLike[
+    OwnerT: AnyNumpyLike = NumpyLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = NDArray[np.bool_],
+    SetResultT = OwnerT,
+](
+    ArrayLike[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
+    ArrayOperators[OpValueT, OpResultT, CompResultT],
+    InplaceArrayOperators[OpValueT],
+    Protocol,
+):
     """Protocol for array-like objects that implement NumPy-specific APIs."""
+
+    def __imatmul__(self, other: OpValueT, /) -> Self:
+        """Apply matrix multiplication with this array as the output."""
+
+    def to_device(self, device: Literal["cpu"], /, *, stream: int | Any | None = None) -> Self:  # noqa: ANN401
+        """Move the array to the CPU."""
 
     @property
     def dtype(self) -> np.dtype:
@@ -223,17 +331,23 @@ class NumpyLike[DT](ArrayLike[DT], Protocol):
         """Handle numpy array functions."""
 
     @property
-    def mT(self) -> NumpyLike[Any] | np.ndarray:  # noqa: N802
+    def mT(self) -> ShapeResultT:  # noqa: N802
         """Matrix-transposed view."""
 
     @property
-    def T(self) -> NumpyLike[Any] | np.ndarray:  # noqa: N802
+    def T(self) -> ShapeResultT:  # noqa: N802
         """Transposed view."""
 
-    def transpose(self, *axes: int | None) -> NumpyLike[Any] | np.ndarray:
+    @overload
+    def transpose(self, *axes: int) -> ShapeResultT: ...
+
+    @overload
+    def transpose(self, axes: Sequence[int] | None, /) -> ShapeResultT: ...
+
+    def transpose(self, *axes: int | Sequence[int] | None) -> ShapeResultT:
         """Return transposed array."""
 
-    def copy(self, order: Order = "C") -> NumpyLike[Any] | np.ndarray:
+    def copy(self, order: Order = "C") -> OwnerT:
         """Return array copy."""
 
     def astype(
@@ -243,7 +357,7 @@ class NumpyLike[DT](ArrayLike[DT], Protocol):
         casting: Literal["no", "equiv", "safe", "same_kind", "unsafe"] = "unsafe",
         subok: bool = True,
         copy: bool = True,
-    ) -> NumpyLike[Any] | np.ndarray:
+    ) -> OpResultT:
         """Return cast array."""
 
     @property
@@ -251,7 +365,19 @@ class NumpyLike[DT](ArrayLike[DT], Protocol):
         """The flags of the array."""
 
 
-class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.mixins.NDArrayOperatorsMixin, ABC):
+class NumpyLikeImplementation[
+    OwnerT: AnyNumpyLike = NumpyLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = NDArray[np.bool_],
+    SetResultT = OwnerT,
+](
+    NumpyOperatorsMixin[OpValueT, OpResultT, CompResultT],
+    ArrayLike[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
+    ABC,
+):
     """ABC implementation for array-like objects that behave like NumPy arrays.
 
     Representation-specific conversion and metadata are explicitly abstract rather
@@ -266,8 +392,7 @@ class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.
         """Preserve inherited equality before a subclass's dataclass decorator runs."""
         super().__init_subclass__(**kwargs)
         if "__eq__" not in cls.__dict__:
-            inherited_eq = cls.__eq__
-            cls.__eq__ = inherited_eq
+            setattr(cls, "__eq__", cls.__eq__)  # noqa: B010 - do not redeclare the typed inherited method
 
     @abstractmethod
     def __array__(self, dtype: DTypeLike | None = None, /, *, copy: bool | None = None) -> np.ndarray:
@@ -297,12 +422,12 @@ class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.
         """Number of elements in the array."""
         return math.prod(self.shape)
 
-    def __getitem__(self: Self, index: ToIndices, /) -> NumpyLikeImplementation[DT] | DT:
+    def __getitem__(self, index: ToIndices, /) -> ShapeResultT:
         """Return a new array containing the indexed values."""
         msg = f"{type(self).__name__} does not support indexing."
         raise NotImplementedError(msg)
 
-    def __setitem__(self, index: ToIndices, value: object, /) -> None:
+    def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:
         """Set the values at the given indices to the given value."""
         msg = f"{type(self).__name__} does not support item assignment."
         raise NotImplementedError(msg)
@@ -348,16 +473,16 @@ class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.
         """
 
     @property
-    def mT(self) -> NumpyLike[Any] | np.ndarray:  # noqa: N802
+    def mT(self) -> ShapeResultT:  # noqa: N802
         """The transposed version of the underlying array."""
-        return np.matrix_transpose(self)
+        return cast("ShapeResultT", np.matrix_transpose(self))
 
     @property
-    def T(self) -> NumpyLike[Any] | np.ndarray:  # noqa: N802
+    def T(self) -> ShapeResultT:  # noqa: N802
         """The transposed version of the underlying array."""
-        return np.transpose(self)
+        return cast("ShapeResultT", np.transpose(self))
 
-    def transpose(self, *axes: int | None) -> NumpyLike[Any] | np.ndarray:
+    def transpose(self, *axes: int | Sequence[int] | None) -> ShapeResultT:
         """Return a transposed version of the NumpySample.
 
         This method implicitly also provides full axis tracking support for
@@ -372,12 +497,12 @@ class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.
             A transposed version of the NumpySample.
         """
         if len(axes) == 0:
-            return np.transpose(self)
+            return cast("ShapeResultT", np.transpose(self))
         if len(axes) == 1 and not isinstance(axes[0], int):
-            return np.transpose(self, axes[0])
+            return cast("ShapeResultT", np.transpose(self, axes[0]))
         return np.transpose(self, axes)  # ty:ignore[no-matching-overload]
 
-    def copy(self, order: Order = "C") -> NumpyLike[Any] | np.ndarray:
+    def copy(self, order: Order = "C") -> OwnerT:
         """Return a copy of the array."""
         return np.copy(self, order=order, subok=True)  # ty:ignore[no-matching-overload]
 
@@ -388,7 +513,7 @@ class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.
         casting: Literal["no", "equiv", "safe", "same_kind", "unsafe"] = "unsafe",
         subok: bool = True,
         copy: bool = True,
-    ) -> NumpyLike[Any] | np.ndarray:
+    ) -> OpResultT:
         """Copy of the array, cast to a specified type."""
         if order != "K" or casting != "unsafe" or not subok:
             msg = "Non-default ndarray.astype options require a representation-specific implementation."
@@ -428,7 +553,7 @@ class NumpyLikeImplementation[DT: NumpyLike | np.ndarray](ArrayLike[DT], np.lib.
         msg = f"{type(self).__name__} does not support len()."
         raise NotImplementedError(msg)
 
-    def __iter__(self) -> Iterator[DT]:
+    def __iter__(self) -> Iterator[ShapeResultT]:
         """Returns an iterator over the first dimension of the array.
 
         This is not mandated by the array API standard, but numpy, torch and jax all support it.

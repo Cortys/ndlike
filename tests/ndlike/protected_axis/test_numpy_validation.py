@@ -31,7 +31,7 @@ def test_subclass_requires_non_empty_protected_axes() -> None:
     with pytest.raises(TypeError, match="must define protected_axes"):
 
         @dataclass(frozen=True, slots=True)
-        class _Empty(NumpyAxisProtected[np.ndarray]):
+        class _Empty(NumpyAxisProtected):
             array: np.ndarray
             protected_axes: ClassVar[dict[str, int]] = {}
 
@@ -41,7 +41,7 @@ def test_subclass_rejects_non_dict_protected_axes() -> None:
     with pytest.raises(TypeError, match="must define protected_axes"):
 
         @dataclass(frozen=True, slots=True)
-        class _BadAxes(NumpyAxisProtected[np.ndarray]):
+        class _BadAxes(NumpyAxisProtected):
             array: np.ndarray
             protected_axes: ClassVar[Any] = ["array"]
 
@@ -51,7 +51,7 @@ def test_subclass_rejects_empty_string_field_name() -> None:
     with pytest.raises(TypeError, match="non-empty string keys"):
 
         @dataclass(frozen=True, slots=True)
-        class _BadName(NumpyAxisProtected[np.ndarray]):
+        class _BadName(NumpyAxisProtected):
             array: np.ndarray
             protected_axes: ClassVar[dict[str, int]] = {"": 1}
 
@@ -61,7 +61,7 @@ def test_subclass_rejects_negative_axis_count() -> None:
     with pytest.raises(TypeError, match="must be a non-negative integer"):
 
         @dataclass(frozen=True, slots=True)
-        class _Negative(NumpyAxisProtected[np.ndarray]):
+        class _Negative(NumpyAxisProtected):
             array: np.ndarray
             protected_axes: ClassVar[dict[str, int]] = {"array": -1}
 
@@ -69,7 +69,7 @@ def test_subclass_rejects_negative_axis_count() -> None:
 def test_subclass_accepts_unannotated_protected_field() -> None:
     """Protected fields may be provided by the instance without class annotations."""
 
-    class RuntimeField(NumpyAxisProtected[np.ndarray]):
+    class RuntimeField(NumpyAxisProtected):
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
         def __init__(self, array: np.ndarray) -> None:
@@ -86,7 +86,7 @@ def test_subclass_accepts_inherited_protected_field(slots: bool) -> None:
     """Inherited dataclass fields support indexing without redeclaration."""
 
     @dataclass(frozen=True, slots=slots)
-    class Parent(NumpyAxisProtected[np.ndarray]):
+    class Parent(NumpyAxisProtected):
         array: np.ndarray
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
@@ -105,7 +105,7 @@ def test_subclass_rejects_non_dict_permitted_ufuncs() -> None:
     with pytest.raises(TypeError, match="permitted_ufuncs must be a dict"):
 
         @dataclass(frozen=True, slots=True)
-        class _BadUfuncs(NumpyAxisProtected[np.ndarray]):
+        class _BadUfuncs(NumpyAxisProtected):
             array: np.ndarray
             protected_axes: ClassVar[dict[str, int]] = {"array": 1}
             permitted_ufuncs: ClassVar[Any] = [np.add]
@@ -116,7 +116,7 @@ def test_subclass_rejects_non_ufunc_key() -> None:
     with pytest.raises(TypeError, match="permitted_ufuncs keys must be numpy ufuncs"):
 
         @dataclass(frozen=True, slots=True)
-        class _NonUfuncKey(NumpyAxisProtected[np.ndarray]):
+        class _NonUfuncKey(NumpyAxisProtected):
             array: np.ndarray
             protected_axes: ClassVar[dict[str, int]] = {"array": 1}
             permitted_ufuncs: ClassVar[Any] = {"not-a-ufunc": ["__call__"]}
@@ -127,7 +127,7 @@ def test_subclass_rejects_non_list_methods() -> None:
     with pytest.raises(TypeError, match="must be a list"):
 
         @dataclass(frozen=True, slots=True)
-        class _BadMethods(NumpyAxisProtected[np.ndarray]):
+        class _BadMethods(NumpyAxisProtected):
             array: np.ndarray
             protected_axes: ClassVar[dict[str, int]] = {"array": 1}
             permitted_ufuncs: ClassVar[Any] = {np.add: "__call__"}
@@ -138,7 +138,7 @@ def test_subclass_rejects_non_string_methods() -> None:
     with pytest.raises(TypeError, match="must be a list"):
 
         @dataclass(frozen=True, slots=True)
-        class _NumberMethod(NumpyAxisProtected[np.ndarray]):
+        class _NumberMethod(NumpyAxisProtected):
             array: np.ndarray
             protected_axes: ClassVar[dict[str, int]] = {"array": 1}
             permitted_ufuncs: ClassVar[Any] = {np.add: [1]}
@@ -149,7 +149,7 @@ def test_subclass_rejects_non_set_permitted_functions() -> None:
     with pytest.raises(TypeError, match="permitted_functions must be a set"):
 
         @dataclass(frozen=True, slots=True)
-        class _BadFuncs(NumpyAxisProtected[np.ndarray]):
+        class _BadFuncs(NumpyAxisProtected):
             array: np.ndarray
             protected_axes: ClassVar[dict[str, int]] = {"array": 1}
             permitted_functions: ClassVar[Any] = [np.mean]
@@ -160,7 +160,7 @@ def test_subclass_rejects_non_callable_in_permitted_functions() -> None:
     with pytest.raises(TypeError, match="permitted_functions must be a set"):
 
         @dataclass(frozen=True, slots=True)
-        class _NonCallable(NumpyAxisProtected[np.ndarray]):
+        class _NonCallable(NumpyAxisProtected):
             array: np.ndarray
             protected_axes: ClassVar[dict[str, int]] = {"array": 1}
             permitted_functions: ClassVar[set[Any]] = {"not-callable"}

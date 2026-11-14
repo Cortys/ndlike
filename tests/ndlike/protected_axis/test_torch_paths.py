@@ -15,7 +15,7 @@ from ndlike.protected_axis.torch import TorchAxisProtected
 
 
 @dataclass(frozen=True, slots=True)
-class _SingleTensor(TorchAxisProtected[Any]):
+class _SingleTensor(TorchAxisProtected):
     """Single torch field with one protected trailing axis."""
 
     tensor: torch.Tensor
@@ -24,7 +24,7 @@ class _SingleTensor(TorchAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _ScalarTensor(TorchAxisProtected[Any]):
+class _ScalarTensor(TorchAxisProtected):
     """Single torch field with no protected trailing axis."""
 
     tensor: torch.Tensor
@@ -32,7 +32,7 @@ class _ScalarTensor(TorchAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _PairTensor(TorchAxisProtected[Any]):
+class _PairTensor(TorchAxisProtected):
     """Two torch fields with no protected trailing axes."""
 
     first: torch.Tensor
@@ -41,7 +41,7 @@ class _PairTensor(TorchAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _PairTensorProtected(TorchAxisProtected[Any]):
+class _PairTensorProtected(TorchAxisProtected):
     """Two torch fields each with one protected trailing axis."""
 
     left: torch.Tensor
@@ -50,7 +50,7 @@ class _PairTensorProtected(TorchAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class _NumpyOnly(TorchAxisProtected[Any]):
+class _NumpyOnly(TorchAxisProtected):
     """Edge case: a torch-protected representation whose only field is numpy.
 
     The representation is unusual but allowed; it triggers the ``_torch_protected_value``
@@ -275,14 +275,14 @@ def test_setitem_rejects_tuple_with_wrong_length() -> None:
     """Assigning a tuple with the wrong number of fields raises TypeError."""
     x = _PairTensor(torch.zeros((2, 2)), torch.ones((2, 2)))
     with pytest.raises(TypeError, match="Expected tuple"):
-        x[0] = (torch.zeros(2),)
+        x[0] = (torch.zeros(2),)  # ty: ignore[invalid-assignment]
 
 
 def test_setitem_rejects_scalar_for_multi_field() -> None:
     """Single value assignment is rejected for multi-field protected objects."""
     x = _PairTensor(torch.zeros((2, 2)), torch.ones((2, 2)))
     with pytest.raises(TypeError, match="multi-field protected object"):
-        x[0] = torch.zeros(2)
+        x[0] = torch.zeros(2)  # ty: ignore[invalid-assignment]
 
 
 def test_setitem_rejects_value_with_wrong_protected_shape() -> None:

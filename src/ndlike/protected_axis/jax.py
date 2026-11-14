@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC
 from dataclasses import dataclass, replace
 from inspect import isabstract
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self, cast, overload, override
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Never, Self, cast, overload, override
 
 import jax
 from jax import numpy as jnp
@@ -17,7 +17,7 @@ from ndlike.jax_functions import (
     jax_swapaxes,
     jax_take_along_axis,
 )
-from ndlike.jax_like import JaxLike, JaxLikeImplementation
+from ndlike.jax_like import AnyJaxLike, JaxLike, JaxLikeImplementation
 from ndlike.protected_axis._common import (
     _AxisProtectedBase,
     batch_shape,
@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from ndlike.array_like import ToIndices
 
 
+type AnyJaxAxisProtected = JaxAxisProtected[Any, Any, Any, Any, Any, Any, Any]  # noqa: BKN001 - broad backend protocol alias
 type JaxProtectedValue = JaxLike[Any] | jax.Array | np.ndarray
 type JaxAtMethod = Literal["set", "add", "subtract", "multiply", "divide", "power", "min", "max"]
 
@@ -49,7 +50,7 @@ def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
         raise ValueError(msg)
 
 
-def _inherit_broadcasted_batch(cls: type[JaxAxisProtected]) -> None:
+def _inherit_broadcasted_batch(cls: type[AnyJaxAxisProtected]) -> None:
     """Merge inherited and local broadcast markers into an independent set."""
     broadcasted_batch: set[str] = set()
     declarations = [getattr(base, "broadcasted_batch", set()) for base in cls.__bases__]
@@ -113,8 +114,18 @@ def _normalize_broadcast_index(
     return tuple(projected)
 
 
-class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
-    _AxisProtectedBase[JaxProtectedValue, "JaxAxisProtected[J]"], JaxLikeImplementation[J], ABC
+class JaxAxisProtected[
+    OwnerT: AnyJaxLike = JaxLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = jax.Array,
+    SetResultT = OwnerT,
+](
+    _AxisProtectedBase[JaxProtectedValue, OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT],
+    JaxLikeImplementation[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
+    ABC,
 ):
     """ABC for representations with protected jax-like fields and optional NumPy sidecars.
 
@@ -230,13 +241,13 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
     @overload
     def with_protected_values(
         self, values: dict[str, JaxProtectedValue], func: Callable | None
-    ) -> JaxAxisProtected[J]: ...
+    ) -> OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT: ...
 
     def with_protected_values(
         self,
         values: dict[str, JaxProtectedValue],
         func: Callable | None = None,  # noqa: ARG002
-    ) -> JaxAxisProtected[J]:
+    ) -> OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT:
         """Return a copy with updated protected field values."""
         return replace(self, **values)  # ty:ignore[invalid-argument-type]
 
@@ -248,7 +259,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
         return self.shape[0]
 
     @override
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[ShapeResultT]:
         for index in range(len(self)):
             yield self[index]
 
@@ -259,12 +270,12 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
     @override
     @property
     def dtype(self) -> jnp.dtype:
-        return cast("jnp.dtype", self._jax_protected_value().dtype)
+        return self._jax_protected_value().dtype
 
     @override
     @property
     def device(self) -> jax.Device:
-        return cast("jax.Device", self._jax_protected_value().device)
+        return self._jax_protected_value().device
 
     @property
     def sharding(self) -> Any:  # noqa: ANN401
@@ -284,7 +295,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
 
     @override
     @property
-    def mT(self) -> JaxLike[Any] | jax.Array:
+    def mT(self) -> ShapeResultT:
         if self.ndim < 2:
             msg = "mT requires at least 2 batch dimensions."
             raise ValueError(msg)
@@ -292,11 +303,11 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
 
     @override
     @property
-    def mH(self) -> JaxLike[Any] | jax.Array:
+    def mH(self) -> ShapeResultT:
         if self.ndim < 2:
             msg = "mH requires at least 2 batch dimensions."
             raise ValueError(msg)
-        return jax_conj(self.mT)
+        return jax_conj(cast("Any", self.mT))
 
     def _index_with_protected_axes(self, index: ToIndices, protected_axes_count: int) -> tuple[Any, ...]:
         """Append full slices for the protected trailing axes."""
@@ -350,7 +361,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
 
         return candidate_values
 
-    def _gather_protected_values(self, index: ToIndices) -> JaxAxisProtected[J]:
+    def _gather_protected_values(self, index: ToIndices) -> ShapeResultT:
         """Return a copy with the indexed batch slice of every protected field."""
         require_effective_fields(self._effective_protected_axes)
         values = self.protected_values()
@@ -372,7 +383,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
                 else:
                     value = _broadcast_batch(value, axes, primary_batch)
             full_index = self._index_with_protected_axes(field_index, axes)
-            result = cast("Any", value)[full_index]
+            result = value[full_index]
 
             if axes == 0 and not hasattr(result, "ndim"):
                 result = np.asarray(result, dtype=value.dtype) if isinstance(value, np.ndarray) else jnp.array(result)
@@ -386,9 +397,9 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
                 msg = f"Indexing field {name!r} modified protected trailing axes."
                 raise IndexError(msg)
 
-            indexed[name] = cast("JaxProtectedValue", result)
+            indexed[name] = result
 
-        return self.with_protected_values(indexed)
+        return cast("ShapeResultT", self.with_protected_values(indexed))
 
     def _scatter_protected_values(
         self,
@@ -396,7 +407,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
         method: JaxAtMethod,
         value: object,
         kwargs: dict[str, Any],
-    ) -> JaxAxisProtected[J]:
+    ) -> SetResultT:
         """Return a copy with an out-of-place ``jax.Array.at`` update applied to every protected field."""
         require_effective_fields(self._effective_protected_axes)
         if method not in type(self).permitted_at_methods:
@@ -421,28 +432,28 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
                     raise TypeError(msg)
                 candidate = candidate_values[name]
                 if value.dtype == object and isinstance(candidate, np.ndarray) and candidate.ndim == 0:
-                    candidate = cast("Any", candidate).item()
+                    candidate = candidate.item()
                 copied = value.copy()
                 copied[full_index] = candidate
                 updates[name] = copied
                 continue
 
-            updated = getattr(cast("Any", value).at[full_index], method)(candidate_values[name], **kwargs)
-            updates[name] = cast("JaxProtectedValue", updated)
+            updated = getattr(value.at[full_index], method)(candidate_values[name], **kwargs)
+            updates[name] = updated
 
-        return self.with_protected_values(updates)
+        return cast("SetResultT", self.with_protected_values(updates))
 
     @property
-    def at(self) -> JaxAxisProtectedIndexUpdateHelper[J]:
+    def at(self) -> JaxAxisProtectedIndexUpdateHelper[Self | SetValueT, SetResultT, ShapeResultT]:
         """Return an indexed helper whose updates require ``permitted_at_methods`` permission."""
         return JaxAxisProtectedIndexUpdateHelper(self)
 
     @override
-    def __getitem__(self, index: ToIndices, /) -> JaxAxisProtected[J]:
+    def __getitem__(self, index: ToIndices, /) -> ShapeResultT:
         return self._gather_protected_values(index)
 
     @override
-    def __setitem__(self, index: ToIndices, value: object, /) -> None:
+    def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:
         del index, value
         msg = "JAX arrays are immutable, use x = x.at[index].set(value) instead."
         raise TypeError(msg)
@@ -464,7 +475,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
                 continue
 
             converted = cast("Any", value).astype(dtype, copy=copy, device=device)
-            updates[name] = cast("JaxProtectedValue", converted)
+            updates[name] = converted
             changed = changed or converted is not value
 
         if not changed:
@@ -479,7 +490,7 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
         *,
         device: jax.Device | Sharding | None = None,
         copy: bool = False,
-    ) -> JaxLikeImplementation[Any]:
+    ) -> Self:
         return self.astype(dtype=dtype, copy=copy, device=device)
 
     @classmethod
@@ -532,67 +543,67 @@ class JaxAxisProtected[J: JaxLike | jax.Array | np.ndarray](
         return values
 
     @override
-    def reshape(self, *args: int | Sequence[int], order: str = "C") -> JaxLike[Any] | jax.Array:
+    def reshape(self, *args: int | Sequence[int], order: str = "C") -> ShapeResultT:
         """Return a copy with reshaped protected values."""
         shape = cast("Sequence[int]", args[0] if len(args) == 1 and not isinstance(args[0], int) else args)
 
         return jax_reshape(self, tuple(shape), order=order)
 
-    def take_along_axis(self, indices: jax.Array, axis: int = -1) -> JaxLike[Any] | jax.Array:
+    def take_along_axis(self, indices: jax.Array, axis: int = -1) -> ShapeResultT:
         """Return a copy with gathered protected values along a batch dimension."""
         return jax_take_along_axis(self, indices, axis)
 
 
 @dataclass(frozen=True, slots=True)
-class JaxAxisProtectedIndexUpdateRef[J: JaxLike | jax.Array | np.ndarray]:
+class JaxAxisProtectedIndexUpdateRef[ValueT, ResultT, ShapeResultT = ResultT]:
     """Update helper bound to one batch index, mirroring ``jax.Array.at[index]``."""
 
-    owner: JaxAxisProtected[J]
+    owner: JaxAxisProtected[Any, Any, Any, Any, ShapeResultT, Any, ResultT]
     index: ToIndices
 
-    def get(self) -> JaxAxisProtected[J]:
+    def get(self) -> ShapeResultT:
         """Return a copy holding the indexed slice of every protected field, same as ``owner[index]``."""
         return self.owner[self.index]
 
-    def set(self, value: object, **kwargs: Any) -> JaxAxisProtected[J]:  # noqa: ANN401
+    def set(self, value: ValueT, **kwargs: Any) -> ResultT:  # noqa: ANN401
         """Return a copy with the indexed batch entries replaced by ``value``."""
         return self.owner._scatter_protected_values(self.index, "set", value, kwargs)  # noqa: SLF001
 
-    def add(self, value: object, **kwargs: Any) -> JaxAxisProtected[J]:  # noqa: ANN401
+    def add(self, value: ValueT, **kwargs: Any) -> ResultT:  # noqa: ANN401
         """Return a copy with ``value`` added to the indexed batch entries."""
         return self.owner._scatter_protected_values(self.index, "add", value, kwargs)  # noqa: SLF001
 
-    def subtract(self, value: object, **kwargs: Any) -> JaxAxisProtected[J]:  # noqa: ANN401
+    def subtract(self, value: ValueT, **kwargs: Any) -> ResultT:  # noqa: ANN401
         """Return a copy with ``value`` subtracted from the indexed batch entries."""
         return self.owner._scatter_protected_values(self.index, "subtract", value, kwargs)  # noqa: SLF001
 
-    def multiply(self, value: object, **kwargs: Any) -> JaxAxisProtected[J]:  # noqa: ANN401
+    def multiply(self, value: ValueT, **kwargs: Any) -> ResultT:  # noqa: ANN401
         """Return a copy with the indexed batch entries multiplied by ``value``."""
         return self.owner._scatter_protected_values(self.index, "multiply", value, kwargs)  # noqa: SLF001
 
-    def divide(self, value: object, **kwargs: Any) -> JaxAxisProtected[J]:  # noqa: ANN401
+    def divide(self, value: ValueT, **kwargs: Any) -> ResultT:  # noqa: ANN401
         """Return a copy with the indexed batch entries divided by ``value``."""
         return self.owner._scatter_protected_values(self.index, "divide", value, kwargs)  # noqa: SLF001
 
-    def power(self, value: object, **kwargs: Any) -> JaxAxisProtected[J]:  # noqa: ANN401
+    def power(self, value: ValueT, **kwargs: Any) -> ResultT:  # noqa: ANN401
         """Return a copy with the indexed batch entries raised to the power of ``value``."""
         return self.owner._scatter_protected_values(self.index, "power", value, kwargs)  # noqa: SLF001
 
-    def min(self, value: object, **kwargs: Any) -> JaxAxisProtected[J]:  # noqa: ANN401
+    def min(self, value: ValueT, **kwargs: Any) -> ResultT:  # noqa: ANN401
         """Return a copy with the elementwise minimum of the indexed batch entries and ``value``."""
         return self.owner._scatter_protected_values(self.index, "min", value, kwargs)  # noqa: SLF001
 
-    def max(self, value: object, **kwargs: Any) -> JaxAxisProtected[J]:  # noqa: ANN401
+    def max(self, value: ValueT, **kwargs: Any) -> ResultT:  # noqa: ANN401
         """Return a copy with the elementwise maximum of the indexed batch entries and ``value``."""
         return self.owner._scatter_protected_values(self.index, "max", value, kwargs)  # noqa: SLF001
 
 
 @dataclass(frozen=True, slots=True)
-class JaxAxisProtectedIndexUpdateHelper[J: JaxLike | jax.Array | np.ndarray]:
+class JaxAxisProtectedIndexUpdateHelper[ValueT, ResultT, ShapeResultT = ResultT]:
     """Helper returned by :attr:`JaxAxisProtected.at`, mirroring ``jax.Array.at``."""
 
-    owner: JaxAxisProtected[J]
+    owner: JaxAxisProtected[Any, Any, Any, Any, ShapeResultT, Any, ResultT]
 
-    def __getitem__(self, index: ToIndices, /) -> JaxAxisProtectedIndexUpdateRef[J]:
+    def __getitem__(self, index: ToIndices, /) -> JaxAxisProtectedIndexUpdateRef[ValueT, ResultT, ShapeResultT]:
         """Bind a batch index, which never addresses the protected trailing axes."""
         return JaxAxisProtectedIndexUpdateRef(self.owner, index)

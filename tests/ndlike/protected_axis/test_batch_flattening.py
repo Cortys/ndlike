@@ -57,7 +57,7 @@ def test_numpy_concatenate_none_supports_positional_axis_and_out():
     from ndlike.protected_axis.numpy import NumpyAxisProtected  # noqa: PLC0415
 
     @dataclass
-    class Matrix(NumpyAxisProtected[np.ndarray]):
+    class Matrix(NumpyAxisProtected):
         values: np.ndarray
         protected_axes: ClassVar[dict[str, int]] = {"values": 2}
 
@@ -83,7 +83,7 @@ def test_jax_flattening_modes_work_under_jit():
     from ndlike.protected_axis.jax import JaxAxisProtected  # noqa: PLC0415
 
     @dataclass
-    class Matrix(JaxAxisProtected[Any]):
+    class Matrix(JaxAxisProtected):
         values: Any
         protected_axes: ClassVar[dict[str, int]] = {"values": 2}
 

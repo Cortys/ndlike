@@ -4,18 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ndlike"
-version = "0.4.1"
+version = "0.5.0"
 description = "A toolkit for defining custom array types on top of NumPy, JAX, and PyTorch."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = ["numpy>=2.1.0", "flextype>=0.3.0"]
 authors = [{ name = "Clemens Damke", email = "clemens@cortys.de" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3.15",
@@ -38,7 +37,7 @@ ndlike = ["py.typed"]
 
 [dependency-groups]
 lint = ["ruff>=0.17.1", "ty>=0.0.89"]
-test = ["pytest>=8.0", "typing-extensions>=4.7.0"]
+test = ["pytest>=8.0"]
 dev = [
     { include-group = "lint" },
     { include-group = "test" },
@@ -47,7 +46,7 @@ dev = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py313"
 output-format = "full"
 
 [tool.ruff.lint]
@@ -77,7 +76,6 @@ combine-as-imports = true
 force-single-line = false
 no-lines-before = ["future"]
 required-imports = ["from __future__ import annotations"]
-extra-standard-library = ["typing_extensions"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/ndlike"]

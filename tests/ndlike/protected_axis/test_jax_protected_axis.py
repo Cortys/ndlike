@@ -25,52 +25,53 @@ from ndlike.jax_functions import (
     jax_take_along_axis,
     jax_transpose,
 )
+from ndlike.jax_like import JaxLike
 from ndlike.protected_axis.jax import JaxAxisProtected
 
 
 @dataclass(frozen=True, slots=True)
-class SingleArray(JaxAxisProtected[Any]):
+class SingleArray(JaxAxisProtected):
     array: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
 
 @dataclass(frozen=True, slots=True)
-class ReductionArray(JaxAxisProtected[Any]):
+class ReductionArray(JaxAxisProtected):
     array: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
     permitted_functions: ClassVar[set[Any]] = {jax_mean, jax_sum, jax_average}
 
 
 @dataclass(frozen=True, slots=True)
-class PairArray(JaxAxisProtected[Any]):
+class PairArray(JaxAxisProtected[JaxLike[Any], JaxLike[Any], JaxLike[Any], tuple[jax.Array, jax.Array]]):
     first: jax.Array
     second: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"first": 0, "second": 0}
 
 
 @dataclass(frozen=True, slots=True)
-class InnerPairArray(JaxAxisProtected[Any]):
+class InnerPairArray(JaxAxisProtected):
     left: jax.Array
     right: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"left": 1, "right": 1}
 
 
 @dataclass(frozen=True, slots=True)
-class MixedArrayNumpy(JaxAxisProtected[Any]):
+class MixedArrayNumpy(JaxAxisProtected):
     array: jax.Array
     sidecar: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 1, "sidecar": 1}
 
 
 @dataclass(frozen=True, slots=True)
-class MixedBatchArrayNumpy(JaxAxisProtected[Any]):
+class MixedBatchArrayNumpy(JaxAxisProtected):
     array: jax.Array
     sidecar: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 0, "sidecar": 0}
 
 
 @dataclass(frozen=True, slots=True)
-class MixedReductionArrayNumpy(JaxAxisProtected[Any]):
+class MixedReductionArrayNumpy(JaxAxisProtected):
     array: jax.Array
     sidecar: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 1, "sidecar": 1}
@@ -78,7 +79,7 @@ class MixedReductionArrayNumpy(JaxAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class OuterNestedArray(JaxAxisProtected[Any]):
+class OuterNestedArray(JaxAxisProtected):
     inner: InnerPairArray
     aux: jax.Array
     protected_axes: ClassVar[dict[str, int]] = {"inner": 1, "aux": 1}

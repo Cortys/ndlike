@@ -17,48 +17,48 @@ from ndlike.torch_like import TorchLike
 
 
 @dataclass(frozen=True, slots=True)
-class SingleTensor(TorchAxisProtected[Any]):
+class SingleTensor(TorchAxisProtected):
     tensor: torch.Tensor
     protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
 
 
 @dataclass(frozen=True, slots=True)
-class ReductionTensor(TorchAxisProtected[Any]):
+class ReductionTensor(TorchAxisProtected):
     tensor: torch.Tensor
     protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
     permitted_functions: ClassVar[set[Any]] = {torch.mean, torch.sum, torch_average}
 
 
 @dataclass(frozen=True, slots=True)
-class PairTensor(TorchAxisProtected[Any]):
+class PairTensor(TorchAxisProtected[TorchLike[Any], TorchLike[Any], TorchLike[Any], tuple[torch.Tensor, torch.Tensor]]):
     first: torch.Tensor
     second: torch.Tensor
     protected_axes: ClassVar[dict[str, int]] = {"first": 0, "second": 0}
 
 
 @dataclass(frozen=True, slots=True)
-class InnerPairTensor(TorchAxisProtected[Any]):
+class InnerPairTensor(TorchAxisProtected):
     left: torch.Tensor
     right: torch.Tensor
     protected_axes: ClassVar[dict[str, int]] = {"left": 1, "right": 1}
 
 
 @dataclass(frozen=True, slots=True)
-class MixedTensorNumpy(TorchAxisProtected[Any]):
+class MixedTensorNumpy(TorchAxisProtected):
     tensor: torch.Tensor
     sidecar: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"tensor": 1, "sidecar": 1}
 
 
 @dataclass(frozen=True, slots=True)
-class MixedBatchTensorNumpy(TorchAxisProtected[Any]):
+class MixedBatchTensorNumpy(TorchAxisProtected):
     tensor: torch.Tensor
     sidecar: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"tensor": 0, "sidecar": 0}
 
 
 @dataclass(frozen=True, slots=True)
-class MixedReductionTensorNumpy(TorchAxisProtected[Any]):
+class MixedReductionTensorNumpy(TorchAxisProtected):
     tensor: torch.Tensor
     sidecar: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"tensor": 1, "sidecar": 1}
@@ -66,7 +66,7 @@ class MixedReductionTensorNumpy(TorchAxisProtected[Any]):
 
 
 @dataclass(frozen=True, slots=True)
-class OuterNestedTensor(TorchAxisProtected[Any]):
+class OuterNestedTensor(TorchAxisProtected):
     inner: InnerPairTensor
     aux: torch.Tensor
     protected_axes: ClassVar[dict[str, int]] = {"inner": 1, "aux": 1}
@@ -252,12 +252,12 @@ def test_average_override_can_change_wrapper_class_or_return_a_native_tensor() -
             return result if args[1] is None else SingleTensor(result)
 
     original = _ChangingTensor(torch.arange(6.0).reshape(2, 3))
-    changed = assert_type(torch_average(original, dim=0), torch.Tensor | TorchLike[Any])
+    changed = assert_type(torch_average(original, dim=0), TorchLike[Any])
     assert isinstance(changed, SingleTensor)
     assert not isinstance(changed, _ChangingTensor)
     torch.testing.assert_close(changed.tensor, torch_average(original.tensor, dim=0))
 
-    unwrapped = assert_type(torch_average(original), torch.Tensor | TorchLike[Any])
+    unwrapped = assert_type(torch_average(original), TorchLike[Any])
     assert isinstance(unwrapped, torch.Tensor)
     torch.testing.assert_close(unwrapped, torch_average(original.tensor))
 
@@ -267,9 +267,9 @@ if TYPE_CHECKING:
     def _check_average_family_types(tensor: torch.Tensor, custom: SingleTensor) -> None:
         assert_type(torch_average(tensor), torch.Tensor)
         assert_type(torch_average(tensor, weights=tensor, out=tensor), torch.Tensor)
-        assert_type(torch_average(custom), torch.Tensor | TorchLike[Any])
-        assert_type(torch_average(tensor, weights=custom), torch.Tensor | TorchLike[Any])
-        assert_type(torch_average(tensor, out=custom), torch.Tensor | TorchLike[Any])
+        assert_type(torch_average(custom), TorchLike[Any])
+        assert_type(torch_average(tensor, weights=custom), TorchLike[Any])
+        assert_type(torch_average(tensor, out=custom), TorchLike[Any])
 
 
 def test_multi_field_tensor_conversion_and_cat() -> None:

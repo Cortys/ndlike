@@ -12,7 +12,7 @@ from contextlib import suppress
 from dataclasses import fields, is_dataclass
 from inspect import isabstract
 import math
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, override, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Never, Protocol, Self, cast, final, override, runtime_checkable
 
 from flextype import flexdispatch
 import jax
@@ -20,6 +20,7 @@ import jax.numpy as jnp
 from jax.tree_util import register_pytree_node_class
 import numpy as np
 
+from ndlike._operators import ArrayOperators
 from ndlike.array_like import ArrayLike
 from ndlike.jax_functions import (
     handle_jax_function,
@@ -40,13 +41,122 @@ if TYPE_CHECKING:
 
     from jax.sharding import Sharding
     from jax.typing import DTypeLike
-    from numpy.typing import ArrayLike as NpArrayLike, DTypeLike as NpDTypeLike, NDArray
+    from numpy.typing import DTypeLike as NpDTypeLike, NDArray
 
     from ndlike.array_like import ToIndices
 
 
+@final
+class JaxIndexUpdateRef[ValueT, ResultT, ShapeResultT = ResultT](Protocol):
+    """Typed indexed reads and updates shared by native and custom JAX arrays.
+
+    ``ValueT`` describes accepted update values; ``ResultT`` describes returned
+    arrays independently. Only the operations shared with protected-axis helpers
+    are required. Implementations may reject unsupported operations or options.
+    """
+
+    def get(self) -> ShapeResultT:
+        """Read the selected values."""
+
+    def set(
+        self,
+        value: ValueT,
+        /,
+        *,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        mode: str | None = None,
+    ) -> ResultT:
+        """Return an array with the selected values replaced."""
+
+    def add(
+        self,
+        value: ValueT,
+        /,
+        *,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        mode: str | None = None,
+    ) -> ResultT:
+        """Return an array with the value added at the selected indices."""
+
+    def subtract(
+        self,
+        value: ValueT,
+        /,
+        *,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        mode: str | None = None,
+    ) -> ResultT:
+        """Return an array with the value subtracted at the selected indices."""
+
+    def multiply(
+        self,
+        value: ValueT,
+        /,
+        *,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        mode: str | None = None,
+    ) -> ResultT:
+        """Return an array with the selected values multiplied."""
+
+    def divide(
+        self,
+        value: ValueT,
+        /,
+        *,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        mode: str | None = None,
+    ) -> ResultT:
+        """Return an array with the selected values divided."""
+
+    def power(
+        self,
+        value: ValueT,
+        /,
+        *,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        mode: str | None = None,
+    ) -> ResultT:
+        """Return an array with the selected values raised to a power."""
+
+    def min(
+        self,
+        value: ValueT,
+        /,
+        *,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        mode: str | None = None,
+    ) -> ResultT:
+        """Return an array with minima applied at the selected indices."""
+
+    def max(
+        self,
+        value: ValueT,
+        /,
+        *,
+        indices_are_sorted: bool = False,
+        unique_indices: bool = False,
+        mode: str | None = None,
+    ) -> ResultT:
+        """Return an array with maxima applied at the selected indices."""
+
+
+@final
+class JaxIndexUpdateHelper[ValueT, ResultT, ShapeResultT = ResultT](Protocol):
+    """Typed ``.at`` helper carrying update-value and result types through indexing."""
+
+    def __getitem__(self, index: ToIndices, /) -> JaxIndexUpdateRef[ValueT, ResultT, ShapeResultT]:
+        """Bind an index while preserving the update-value and result types."""
+
+
 @runtime_checkable
-class JaxLikeConvertible[DT](ArrayLike[DT], Protocol):
+class JaxLikeConvertible[SetValueT = Never](ArrayLike[Any, Any, Any, SetValueT], Protocol):
     """Protocol for array-like objects that can be converted to JAX arrays."""
 
     def __jax_like__(
@@ -60,28 +170,50 @@ class JaxLikeConvertible[DT](ArrayLike[DT], Protocol):
         """Convert to a JaxLike."""
 
 
+type AnyJaxLike = JaxLike[Any, Any, Any, Any, Any, Any, Any]  # noqa: BKN001 - broad backend protocol alias
+
+
 @runtime_checkable
-class JaxLike[DT](ArrayLike[DT], Protocol):
+class JaxLike[
+    OwnerT: AnyJaxLike = JaxLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = jax.Array,
+    SetResultT = OwnerT,
+](
+    ArrayLike[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
+    ArrayOperators[OpValueT, OpResultT, CompResultT],
+    Protocol,
+):
     """Protocol for array-like objects that implement JAX-specific APIs.
 
     Every member declared here also exists on a real ``jax.Array``, otherwise
     ``isinstance(jnp.ones(3), JaxLike)`` would silently be False. That rules out
     ``__jax_function__``, which is declared on :class:`JaxLikeImplementation` instead.
 
-    Dispatched operations may return another JaxLike implementation or a native
-    array, rather than preserving the concrete wrapper class.
+    Dispatched results follow the operation, shape, and assignment contracts.
+    The default owner is a broad JaxLike; an explicit owner enables precise results.
+
+    ``SetValueT`` also types values accepted by ``at[index].set`` and the arithmetic
+    update methods. They accept ``Self | SetValueT``, just like ``__setitem__``,
+    and return ``SetResultT``. Indexed reads return ``ShapeResultT``.
     """
 
+    def to_device(self, device: jax.Device | Sharding, /, *, stream: int | Any | None = None) -> Self:  # noqa: ANN401
+        """Move the array to a JAX device or sharding."""
+
     @property
-    def T(self) -> JaxLike[Any] | jax.Array:  # noqa: N802
+    def T(self) -> ShapeResultT:  # noqa: N802
         """Return a transposed array."""
 
     @property
-    def mT(self) -> JaxLike[Any] | jax.Array:  # noqa: N802
+    def mT(self) -> ShapeResultT:  # noqa: N802
         """Return an array with its last two axes transposed."""
 
     @property
-    def at(self) -> Any:  # noqa: ANN401
+    def at(self) -> JaxIndexUpdateHelper[Self | SetValueT, SetResultT, ShapeResultT]:
         """Indexed update helper, see ``jax.Array.at``."""
 
     @property
@@ -102,22 +234,22 @@ class JaxLike[DT](ArrayLike[DT], Protocol):
     ) -> Self:
         """Return a copy of the array cast to the given data type."""
 
-    def copy(self) -> JaxLike[Any] | jax.Array:
+    def copy(self) -> OwnerT:
         """Return a copy of the array."""
 
-    def reshape(self, *args: int | Sequence[int], order: str = "C") -> JaxLike[Any] | jax.Array:
+    def reshape(self, *args: int | Sequence[int], order: str = "C") -> ShapeResultT:
         """Return a reshaped version of the array."""
 
-    def ravel(self, order: str = "C") -> JaxLike[Any] | jax.Array:
+    def ravel(self, order: str = "C") -> ShapeResultT:
         """Return a flattened version of the array."""
 
-    def flatten(self, order: str = "C") -> JaxLike[Any] | jax.Array:
+    def flatten(self, order: str = "C") -> ShapeResultT:
         """Return a flattened version of the array."""
 
-    def squeeze(self, axis: int | Sequence[int] | None = None) -> JaxLike[Any] | jax.Array:
+    def squeeze(self, axis: int | Sequence[int] | None = None) -> ShapeResultT:
         """Return the array with axes of length one removed."""
 
-    def transpose(self, *args: int | Sequence[int] | None) -> JaxLike[Any] | jax.Array:
+    def transpose(self, *args: int | Sequence[int] | None) -> ShapeResultT:
         """Return a transposed version of the array."""
 
     def view(self, dtype: DTypeLike | None = None, type: None = None) -> Self:  # noqa: A002
@@ -130,7 +262,19 @@ class JaxLike[DT](ArrayLike[DT], Protocol):
         """Return the array as a (nested) Python list."""
 
 
-class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
+class JaxLikeImplementation[
+    OwnerT: AnyJaxLike = JaxLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = jax.Array,
+    SetResultT = OwnerT,
+](
+    JaxOperatorsMixin[OpValueT, OpResultT, CompResultT],
+    JaxLike[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
+    ABC,
+):
     """ABC implementation for array-like objects that behave like JAX arrays.
 
     Subclasses implement ``__jax_function__`` plus the representation-specific members.
@@ -170,11 +314,11 @@ class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
     tree_map_traverse: ClassVar[bool] = False
 
     @abstractmethod
-    def __getitem__(self, index: ToIndices, /) -> Any:  # noqa: ANN401
+    def __getitem__(self, index: ToIndices, /) -> ShapeResultT:
         """Return values selected by index."""
 
     @abstractmethod
-    def __setitem__(self, index: ToIndices, value: NpArrayLike, /) -> None:
+    def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:
         """Set values selected by index."""
 
     @abstractmethod
@@ -186,7 +330,7 @@ class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
         """Return the length along the first axis."""
 
     @abstractmethod
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[ShapeResultT]:
         """Iterate over the first axis."""
 
     @property
@@ -216,7 +360,7 @@ class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
 
     @property
     @abstractmethod
-    def at(self) -> Any:  # noqa: ANN401
+    def at(self) -> JaxIndexUpdateHelper[Self | SetValueT, SetResultT, ShapeResultT]:
         """Return the subclass-specific indexed update helper."""
 
     @property
@@ -236,8 +380,7 @@ class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
         """
         super().__init_subclass__(**kwargs)
         if "__eq__" not in cls.__dict__:
-            inherited_eq = cls.__eq__
-            cls.__eq__ = inherited_eq
+            setattr(cls, "__eq__", cls.__eq__)  # noqa: B010 - do not redeclare the typed inherited method
 
         if cls is JaxLikeImplementation or isabstract(cls) or ABC in cls.__bases__:
             return
@@ -462,21 +605,21 @@ class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
         )
 
     @property
-    def T(self) -> JaxLike[Any] | jax.Array:  # noqa: N802
+    def T(self) -> ShapeResultT:  # noqa: N802
         """Inverts the order of the axes of the underlying array."""
         return jax_transpose(self)
 
     @property
-    def mT(self) -> JaxLike[Any] | jax.Array:  # noqa: N802
+    def mT(self) -> ShapeResultT:  # noqa: N802
         """The version of the underlying array with its last two axes swapped."""
         return jax_matrix_transpose(self)
 
     @property
-    def mH(self) -> JaxLike[Any] | jax.Array:  # noqa: N802
+    def mH(self) -> ShapeResultT:  # noqa: N802
         """The adjoint (conjugate) transposed version of the underlying array."""
-        return jax_conj(self.mT)
+        return jax_conj(cast("Any", self.mT))
 
-    def reshape(self, *args: int | Sequence[int], order: str = "C") -> JaxLike[Any] | jax.Array:
+    def reshape(self, *args: int | Sequence[int], order: str = "C") -> ShapeResultT:
         """Return a reshaped version of the array.
 
         Args:
@@ -487,9 +630,9 @@ class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
             The reshaped array.
         """
         shape = args[0] if len(args) == 1 and not isinstance(args[0], int) else args
-        return jax_reshape(self, shape, order)  # ty: ignore[no-matching-overload]
+        return jax_reshape(self, cast("Sequence[int]", shape), order)
 
-    def transpose(self, *args: int | Sequence[int] | None) -> JaxLike[Any] | jax.Array:
+    def transpose(self, *args: int | Sequence[int] | None) -> ShapeResultT:
         """Return a transposed version of the array.
 
         Args:
@@ -502,9 +645,9 @@ class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
         if len(args) == 0:
             return jax_transpose(self)
         axes = args[0] if len(args) == 1 and not isinstance(args[0], int) else args
-        return jax_transpose(self, axes)  # ty: ignore[invalid-argument-type]
+        return jax_transpose(self, cast("Sequence[int] | None", axes))
 
-    def ravel(self, order: str = "C") -> JaxLike[Any] | jax.Array:
+    def ravel(self, order: str = "C") -> ShapeResultT:
         """Return a flattened version of the array.
 
         Args:
@@ -515,7 +658,7 @@ class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
         """
         return jax_reshape(self, (-1,), order)
 
-    def flatten(self, order: str = "C") -> JaxLike[Any] | jax.Array:
+    def flatten(self, order: str = "C") -> ShapeResultT:
         """Return a flattened version of the array.
 
         Args:
@@ -526,7 +669,7 @@ class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
         """
         return self.ravel(order)
 
-    def squeeze(self, axis: int | Sequence[int] | None = None) -> JaxLike[Any] | jax.Array:
+    def squeeze(self, axis: int | Sequence[int] | None = None) -> ShapeResultT:
         """Return the array with axes of length one removed.
 
         Args:
@@ -537,7 +680,7 @@ class JaxLikeImplementation[DT](JaxOperatorsMixin, JaxLike[DT], ABC):
         """
         return jax_squeeze(self, axis)
 
-    def copy(self) -> JaxLike[Any] | jax.Array:
+    def copy(self) -> OwnerT:
         """Return a copy of the array."""
         return jax_copy(self)
 
@@ -702,4 +845,13 @@ def _[DT](
     return data.__jax_like__(dtype, device=device, copy=copy)
 
 
-__all__ = ["JaxLike", "JaxLikeConvertible", "JaxLikeImplementation", "jax_tree_map", "to_jax_like"]
+__all__ = [
+    "AnyJaxLike",
+    "JaxIndexUpdateHelper",
+    "JaxIndexUpdateRef",
+    "JaxLike",
+    "JaxLikeConvertible",
+    "JaxLikeImplementation",
+    "jax_tree_map",
+    "to_jax_like",
+]

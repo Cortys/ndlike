@@ -37,7 +37,7 @@ from ndlike.protected_axis.torch import TorchAxisProtected
 def test_abstract_array_subclass_skips_validation() -> None:
     """Abstract subclasses can be defined without ``protected_axes``."""
 
-    class _AbstractArray(NumpyAxisProtected[np.ndarray]):
+    class _AbstractArray(NumpyAxisProtected):
         @abstractmethod
         def custom(self) -> None: ...
 
@@ -48,7 +48,7 @@ def test_abstract_array_subclass_skips_validation() -> None:
 def test_abstract_torch_subclass_skips_validation() -> None:
     """Abstract torch subclasses can be defined without ``protected_axes``."""
 
-    class _AbstractTorch(TorchAxisProtected[Any]):
+    class _AbstractTorch(TorchAxisProtected):
         @abstractmethod
         def custom(self) -> None: ...
 
@@ -61,7 +61,9 @@ def test_abstract_torch_subclass_skips_validation() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _SingleProtectedRaw(NumpyAxisProtected[np.ndarray]):
+class _SingleProtectedRaw(
+    NumpyAxisProtected["_SingleProtectedRaw", "_SingleProtectedRaw", "_SingleProtectedRaw", np.ndarray]
+):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
@@ -74,7 +76,11 @@ def test_setitem_single_field_with_raw_value() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _SingleScalarProtectedRaw(TorchAxisProtected[Any]):
+class _SingleScalarProtectedRaw(
+    TorchAxisProtected[
+        "_SingleScalarProtectedRaw", "_SingleScalarProtectedRaw", "_SingleScalarProtectedRaw", torch.Tensor
+    ]
+):
     tensor: torch.Tensor
     protected_axes: ClassVar[dict[str, int]] = {"tensor": 0}
 
@@ -92,7 +98,7 @@ def test_torch_setitem_single_field_with_raw_value() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _ScalarArray(NumpyAxisProtected[np.ndarray]):
+class _ScalarArray(NumpyAxisProtected):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 0}
 
@@ -112,7 +118,7 @@ def test_scalar_array_getitem_promotes_python_scalar() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _SquareInputProtected(NumpyAxisProtected[np.ndarray]):
+class _SquareInputProtected(NumpyAxisProtected):
     """Ufunc-tolerant single-field with one protected axis; reduce drops along axis=1."""
 
     array: np.ndarray
@@ -136,7 +142,7 @@ def test_internals_returns_none_for_unpermitted_function() -> None:
     """When ``check_is_permitted=True`` and the function is not permitted, returns None."""
 
     @dataclass(frozen=True, slots=True)
-    class _Strict(NumpyAxisProtected[np.ndarray]):
+    class _Strict(NumpyAxisProtected):
         array: np.ndarray
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
         permitted_functions: ClassVar[set[Any]] = {np.sum}
@@ -175,7 +181,7 @@ def test_validate_batch_sync_raises_when_batch_shapes_disagree() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _ReshapeProtected(NumpyAxisProtected[np.ndarray]):
+class _ReshapeProtected(NumpyAxisProtected):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
@@ -194,7 +200,7 @@ def test_reshape_with_none_shape_falls_through() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _ConcatTarget(NumpyAxisProtected[np.ndarray]):
+class _ConcatTarget(NumpyAxisProtected):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
 
@@ -225,7 +231,7 @@ def test_stack_with_protected_out_and_no_protected_input_raises() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _OtherTarget(NumpyAxisProtected[np.ndarray]):
+class _OtherTarget(NumpyAxisProtected):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 0}  # different layout
 
@@ -281,7 +287,7 @@ def test_stack_with_protected_out_writes_into_buffer() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _TorchSingle(TorchAxisProtected[Any]):
+class _TorchSingle(TorchAxisProtected):
     tensor: torch.Tensor
     protected_axes: ClassVar[dict[str, int]] = {"tensor": 1}
 
@@ -322,7 +328,7 @@ def test_torch_like_dunder_delegates_to_to() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _ObjectScalarProtected(NumpyAxisProtected[np.ndarray]):
+class _ObjectScalarProtected(NumpyAxisProtected):
     """Object-dtype scalar protected. Indexing yields raw python objects."""
 
     array: np.ndarray
@@ -345,7 +351,7 @@ def test_getitem_scalar_object_array_promotes_to_array() -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _ReduceProtected(NumpyAxisProtected[np.ndarray]):
+class _ReduceProtected(NumpyAxisProtected):
     array: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"array": 1}
     permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {
@@ -427,7 +433,7 @@ def test_ufunc_reduceat_without_indices_raises() -> None:
     """``np.add.reduceat`` without an indices argument raises TypeError."""
 
     @dataclass(frozen=True, slots=True)
-    class _ReduceAtProtected(NumpyAxisProtected[np.ndarray]):
+    class _ReduceAtProtected(NumpyAxisProtected):
         array: np.ndarray
         protected_axes: ClassVar[dict[str, int]] = {"array": 1}
         permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {

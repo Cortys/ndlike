@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC
 from dataclasses import replace
 from inspect import isabstract
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, overload, override
+from typing import TYPE_CHECKING, Any, ClassVar, Never, Self, cast, overload, override
 
 import numpy as np
 import torch
@@ -19,7 +19,7 @@ from ndlike.protected_axis._common import (
     value_shape,
 )
 from ndlike.protected_axis.torch_functions import torch_function
-from ndlike.torch_like import TorchLike, TorchLikeImplementation
+from ndlike.torch_like import AnyTorchLike, TorchLike, TorchLikeImplementation
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from ndlike.array_like import ToIndices
 
 
+type AnyTorchAxisProtected = TorchAxisProtected[Any, Any, Any, Any, Any, Any, Any]  # noqa: BKN001 - broad backend protocol alias
 type TorchProtectedValue = TorchLike[Any] | torch.Tensor | np.ndarray
 
 
@@ -37,8 +38,18 @@ def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
         raise ValueError(msg)
 
 
-class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
-    _AxisProtectedBase[TorchProtectedValue, "TorchAxisProtected[T]"], TorchLikeImplementation[T], ABC
+class TorchAxisProtected[
+    OwnerT: AnyTorchLike = TorchLike[Any],
+    OpValueT = OwnerT,
+    OpResultT = OwnerT,
+    SetValueT = Never,
+    ShapeResultT = OwnerT,
+    CompResultT = torch.Tensor,
+    SetResultT = OwnerT,
+](
+    _AxisProtectedBase[TorchProtectedValue, OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT],
+    TorchLikeImplementation[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
+    ABC,
 ):
     """ABC for representations with protected torch-like fields and optional NumPy sidecars."""
 
@@ -85,13 +96,13 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
     @overload
     def with_protected_values(
         self, values: dict[str, TorchProtectedValue], func: Callable | None
-    ) -> TorchAxisProtected[T]: ...
+    ) -> OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT: ...
 
     def with_protected_values(
         self,
         values: dict[str, TorchProtectedValue],
         func: Callable | None = None,  # noqa: ARG002
-    ) -> TorchAxisProtected[T]:
+    ) -> OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT:
         """Return a copy with updated protected field values."""
         return replace(self, **values)  # ty:ignore[invalid-argument-type]
 
@@ -103,7 +114,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
         return self.shape[0]
 
     @override
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[ShapeResultT]:
         for index in range(len(self)):
             yield self[index]
 
@@ -119,12 +130,12 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
     @override
     @property
     def dtype(self) -> torch.dtype:
-        return cast("torch.dtype", self._torch_protected_value().dtype)
+        return self._torch_protected_value().dtype
 
     @override
     @property
     def device(self) -> torch.device:
-        return cast("torch.device", self._torch_protected_value().device)
+        return self._torch_protected_value().device
 
     @property
     def protected_shape(self) -> tuple[int, ...]:
@@ -135,7 +146,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
 
     @override
     @property
-    def mT(self) -> TorchLike[Any] | torch.Tensor:
+    def mT(self) -> ShapeResultT:
         if self.ndim < 2:
             msg = "mT requires at least 2 batch dimensions."
             raise ValueError(msg)
@@ -143,11 +154,11 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
 
     @override
     @property
-    def mH(self) -> TorchLike[Any] | torch.Tensor:
+    def mH(self) -> ShapeResultT:
         if self.ndim < 2:
             msg = "mH requires at least 2 batch dimensions."
             raise ValueError(msg)
-        return torch.adjoint(self)  # ty: ignore[invalid-argument-type]
+        return cast("ShapeResultT", torch.adjoint(self))  # ty: ignore[invalid-argument-type]
 
     def _index_with_protected_axes(self, index: ToIndices, protected_axes_count: int) -> tuple[Any, ...]:
         index_tuple = index if isinstance(index, tuple) else (index,)
@@ -196,7 +207,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
         return candidate_values
 
     @override
-    def __getitem__(self, index: ToIndices, /) -> TorchAxisProtected[T]:
+    def __getitem__(self, index: ToIndices, /) -> ShapeResultT:
         require_effective_fields(self._effective_protected_axes)
         values = self.protected_values()
         indexed: dict[str, TorchProtectedValue] = {}
@@ -204,7 +215,7 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
         for name, axes in self._effective_protected_axes.items():
             full_index = self._index_with_protected_axes(index, axes)
             value = values[name]
-            result = cast("Any", value)[full_index]
+            result = value[full_index]
 
             if axes == 0 and not hasattr(result, "ndim"):
                 result = (
@@ -220,16 +231,16 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
                 msg = f"Indexing field {name!r} modified protected trailing axes."
                 raise IndexError(msg)
 
-            indexed[name] = cast("TorchProtectedValue", result)
+            indexed[name] = result
 
-        return self.with_protected_values(indexed)
+        return cast("ShapeResultT", self.with_protected_values(indexed))
 
     @override
-    def __setitem__(self, index: ToIndices, value: object, /) -> None:
+    def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:
         require_effective_fields(self._effective_protected_axes)
-        value = self._prepare_assignment_value(value)
+        prepared = self._prepare_assignment_value(value)
         values = self.protected_values()
-        candidate_values = self._coerce_assignment_value(value)
+        candidate_values = self._coerce_assignment_value(prepared)
 
         for name, axes in self._effective_protected_axes.items():
             full_index = self._index_with_protected_axes(index, axes)
@@ -246,8 +257,8 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
                 updates[name] = value
                 continue
 
-            converted = cast("Any", value).to(*args, **kwargs)
-            updates[name] = cast("TorchProtectedValue", converted)
+            converted = value.to(*args, **kwargs)
+            updates[name] = converted
             changed = changed or converted is not value
 
         if not changed:
@@ -262,8 +273,29 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
         *,
         device: torch.device | str | None = None,
         copy: bool = False,
-    ) -> TorchLikeImplementation[Any]:
+    ) -> Self:
         return self.to(dtype=dtype, device=device, copy=copy)
+
+    def _postprocess_elementwise_result(
+        self,
+        values: dict[str, TorchProtectedValue],
+        *,
+        func: Callable,
+        operands: tuple[object, ...],
+    ) -> dict[str, TorchProtectedValue]:
+        """Adjust arithmetic fields before validation and reconstruction.
+
+        Args:
+            values: Computed values for every protected field.
+            func: The triggering torch function.
+            operands: Original operands in expression order.
+
+        Returns:
+            The field values to validate and reconstruct. This hook is not
+            called for comparisons or explicit output destinations.
+        """
+        del func, operands
+        return values
 
     @classmethod
     def __torch_function__(
@@ -289,18 +321,18 @@ class TorchAxisProtected[T: TorchLike | torch.Tensor | np.ndarray](
     @override
     def detach(self) -> Self:
         values = {
-            name: value if isinstance(value, np.ndarray) else cast("TorchProtectedValue", cast("Any", value).detach())
+            name: value if isinstance(value, np.ndarray) else value.detach()
             for name, value in self.protected_values().items()
         }
         return self.with_protected_values(values)
 
-    def reshape(self, *shape: int | tuple[int, ...]) -> TorchLike[Any] | torch.Tensor:
+    def reshape(self, *shape: int | tuple[int, ...]) -> ShapeResultT:
         """Return a copy with reshaped protected values."""
         if len(shape) == 1 and isinstance(shape[0], tuple):
             shape = shape[0]
 
-        return torch.reshape(self, shape)  # ty: ignore[invalid-argument-type]
+        return cast("ShapeResultT", torch.reshape(self, shape))  # ty: ignore[invalid-argument-type]
 
-    def gather(self, dim: int, index: torch.Tensor) -> TorchLike[Any] | torch.Tensor:
+    def gather(self, dim: int, index: torch.Tensor) -> ShapeResultT:
         """Return a copy with gathered protected values along a batch dimension."""
-        return torch.gather(self, dim, index)  # ty: ignore[invalid-argument-type]
+        return cast("ShapeResultT", torch.gather(self, dim, index))  # ty: ignore[invalid-argument-type]

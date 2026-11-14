@@ -12,7 +12,7 @@ from ndlike.protected_axis.numpy import NumpyAxisProtected
 
 
 @dataclass(frozen=True)
-class _LengthPair(NumpyAxisProtected[np.ndarray]):
+class _LengthPair(NumpyAxisProtected):
     left: np.ndarray
     right: np.ndarray
     unit: str = "m"
@@ -56,7 +56,7 @@ def test_rejected_assignment_leaves_all_fields_untouched(kind):
     value = {"metadata": source, "array": source.left, "tuple": (source.left, source.right)}[kind]
 
     with pytest.raises((TypeError, ValueError), match=r"metadata|Incompatible units"):
-        target[0] = value
+        target[0] = value  # ty: ignore[invalid-assignment]
 
     np.testing.assert_array_equal(target.left, 0)
     np.testing.assert_array_equal(target.right, 0)
@@ -74,7 +74,7 @@ def test_converted_fields_are_shape_checked_before_assignment():
 
     target = Broken(np.zeros((3, 2)), np.zeros((3, 2, 2)))
     with pytest.raises(ValueError, match="modifies protected trailing axes"):
-        target[0] = object()
+        target[0] = object()  # ty: ignore[invalid-assignment]
 
     np.testing.assert_array_equal(target.left, 0)
     np.testing.assert_array_equal(target.right, 0)

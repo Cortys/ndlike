@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Any, assert_type, overload
 import jax
 import numpy as np
 from ndlike import jax_functions as jf
-from ndlike.jax_like import JaxLike
+from ndlike.jax_like import JaxLike, JaxLikeImplementation
 from ndlike.protected_axis.jax import JaxAxisProtected
 
 type Result = jax.Array | JaxLike[Any]
@@ -60,7 +60,9 @@ def _overloaded_identity(x: int | str, /) -> int | str:
     return x
 
 if TYPE_CHECKING:
-    def _check_operator_types(array: jax.Array, custom: JaxLike[Any], numpy: np.ndarray) -> None:
+    def _check_operator_types(
+        array: jax.Array, custom: JaxLikeImplementation[Result, Any, Result], numpy: np.ndarray
+    ) -> None:
         assert_type(jf.jax_add(array, 1), jax.Array)
         assert_type(jf.jax_subtract(1, array), jax.Array)
         assert_type(jf.jax_multiply(array, array), jax.Array)
@@ -89,7 +91,7 @@ if TYPE_CHECKING:
         assert_type(jf.jax_invert(array), jax.Array)
         assert_type(jf.jax_add(custom, 1), Result)
         assert_type(jf.jax_add(1, custom), Result)
-        assert_type(jf.jax_equal(custom, array), Result)
+        assert_type(jf.jax_equal(custom, array), jax.Array)
         assert_type(jf.jax_divmod(custom, array), tuple[Result, Result])
         assert_type(jf.jax_frexp(custom), tuple[Result, Result])
         assert_type(jf.jax_modf(custom), tuple[Result, Result])
@@ -152,7 +154,7 @@ if TYPE_CHECKING:
         assert_type(_overloaded_identity(1), int)
         assert_type(_overloaded_identity("value"), str)
 
-    def _check_method_types(custom: JaxLike[Any], protected: JaxAxisProtected[jax.Array]) -> None:
+    def _check_method_types(custom: JaxLike[Result, Any, Result], protected: JaxAxisProtected) -> None:
         assert_type(custom.T, Result)
         assert_type(custom.mT, Result)
         assert_type(custom.copy(), Result)
@@ -161,11 +163,11 @@ if TYPE_CHECKING:
         assert_type(custom.ravel(), Result)
         assert_type(custom.flatten(), Result)
         assert_type(custom.squeeze(), Result)
-        assert_type(protected.mT, Result)
-        assert_type(protected.mH, Result)
-        assert_type(protected.reshape(2, 3), Result)
-        assert_type(protected.take_along_axis(jax.numpy.zeros((2, 3), dtype=int)), Result)
-        assert_type(protected.astype(None), JaxAxisProtected[jax.Array])
+        assert_type(protected.mT, JaxLike[Any])
+        assert_type(protected.mH, JaxLike[Any])
+        assert_type(protected.reshape(2, 3), JaxLike[Any])
+        assert_type(protected.take_along_axis(jax.numpy.zeros((2, 3), dtype=int)), JaxLike[Any])
+        assert_type(protected.astype(None), JaxAxisProtected)
 """
 
 _INVALID_TYPING_CHECK = """
@@ -186,7 +188,7 @@ def invalid_calls(array: jax.Array, custom: JaxLike[Any]) -> None:
 
 
 @pytest.mark.parametrize(
-    ("source_text", "expected_errors"), [(_TYPING_CHECK, 0), (_INVALID_TYPING_CHECK, 8)], ids=("valid", "invalid")
+    ("source_text", "expected_errors"), [(_TYPING_CHECK, 0), (_INVALID_TYPING_CHECK, 7)], ids=("valid", "invalid")
 )
 def test_function_signatures_with_ty(tmp_path: Path, source_text: str, expected_errors: int):
     executable = shutil.which("ty")
@@ -277,7 +279,7 @@ def test_optional_and_secondary_array_operands_dispatch(func, kwargs):
 def test_sum_initial_dispatches_when_passed_positionally():
     array = jnp.ones(3)
     initial = RecordingOverride()
-    result = jf.jax_sum(array, None, None, None, False, initial)  # ty: ignore[invalid-argument-type]
+    result = jf.jax_sum(array, None, None, None, False, initial)  # ty: ignore[no-matching-overload]
     assert isinstance(result, tuple)
     assert result[0] is jf.jax_sum
     assert result[1] == (RecordingOverride,)
@@ -330,7 +332,7 @@ def test_subclass_precedence_and_not_implemented_fallback():
             return NotImplemented
 
     left, right = Base(), Subclass()
-    result = jf.jax_add(left, right)  # ty: ignore[invalid-argument-type]
+    result = jf.jax_add(left, right)  # ty: ignore[no-matching-overload]
     assert calls == [Subclass, Base]
     assert result == (jf.jax_add, (Subclass, Base), (left, right), {})
 
@@ -366,9 +368,9 @@ def test_invalid_dispatch_selectors_fail_at_decoration(names, unpack):
 
 def test_call_validation_happens_before_override_dispatch():
     with pytest.raises(TypeError, match="missing a required argument"):
-        jf.jax_add(RecordingOverride())  # ty: ignore[invalid-argument-type, missing-argument]
+        jf.jax_add(RecordingOverride())  # ty: ignore[no-matching-overload]
     with pytest.raises(TypeError, match=r"positional.only"):
-        jf.jax_add(x1=RecordingOverride(), x2=1)  # ty: ignore[positional-only-parameter-as-kwarg]
+        jf.jax_add(x1=RecordingOverride(), x2=1)  # ty: ignore[no-matching-overload]
 
 
 _PUBLIC_WRAPPERS = [

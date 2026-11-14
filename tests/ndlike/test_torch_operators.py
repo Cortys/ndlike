@@ -223,15 +223,8 @@ def test_inplace_dispatch_preserves_output_and_operands(op, func):
     assert result.kwargs["out"] is x
 
 
-@pytest.mark.parametrize(
-    ("op", "func", "kind"),
-    [
-        (op, func, kind)
-        for op, func in _INPLACE
-        for kind in ("scalar", "torch", "wrapper")
-        if op is not operator.imatmul or kind != "scalar"
-    ],
-)
+@pytest.mark.parametrize(("op", "func"), [(op, func) for op, func in _INPLACE if op is not operator.imatmul])
+@pytest.mark.parametrize("kind", ["scalar", "torch", "wrapper"])
 def test_inplace_operators_mutate_existing_storage(op, func, kind):
     dtype = torch.float32 if op is operator.itruediv else torch.int64
     x = _Tensor(torch.tensor([[4, 6], [8, 10]], dtype=dtype))

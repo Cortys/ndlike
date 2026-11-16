@@ -10,15 +10,17 @@ from typing import TYPE_CHECKING, Any, ClassVar, Never, Self, cast, overload, ov
 import numpy as np
 import torch
 
+from ndlike._batch import is_basic_index, normalize_broadcast_index
 from ndlike.protected_axis._common import (
     _AxisProtectedBase,
+    batch_shape,
     primary_protected_name,
     protected_shape,
     require_effective_fields,
     value_ndim,
     value_shape,
 )
-from ndlike.protected_axis.torch_functions import torch_function
+from ndlike.protected_axis.torch_functions import _broadcast_batch, torch_function
 from ndlike.torch_like import AnyTorchLike, TorchLike, TorchLikeImplementation
 
 if TYPE_CHECKING:
@@ -210,11 +212,29 @@ class TorchAxisProtected[
     def __getitem__(self, index: ToIndices, /) -> ShapeResultT:
         require_effective_fields(self._effective_protected_axes)
         values = self.protected_values()
+        logical_shape = self._protected_batch_shape(values)
         indexed: dict[str, TorchProtectedValue] = {}
 
         for name, axes in self._effective_protected_axes.items():
-            full_index = self._index_with_protected_axes(index, axes)
             value = values[name]
+            field_index = index
+            current = batch_shape(value_shape(value), axes)
+            if name in type(self).broadcasted_batch and current != logical_shape:
+                if is_basic_index(
+                    index,
+                    lambda item: (
+                        (
+                            isinstance(item, torch.Tensor)
+                            and item.ndim == 0
+                            and item.dtype in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8)
+                        )
+                        or (isinstance(item, np.ndarray) and item.ndim == 0 and np.issubdtype(item.dtype, np.integer))
+                    ),
+                ):
+                    field_index = normalize_broadcast_index(index, current, logical_shape)
+                else:
+                    value = _broadcast_batch(value, axes, logical_shape)
+            full_index = self._index_with_protected_axes(field_index, axes)
             result = value[full_index]
 
             if axes == 0 and not hasattr(result, "ndim"):
@@ -241,8 +261,11 @@ class TorchAxisProtected[
         prepared = self._prepare_assignment_value(value)
         values = self.protected_values()
         candidate_values = self._coerce_assignment_value(prepared)
-
+        logical_shape = self._protected_batch_shape(values)
         for name, axes in self._effective_protected_axes.items():
+            if name in self.broadcasted_batch and batch_shape(value_shape(values[name]), axes) != logical_shape:
+                msg = "Indexed assignment requires fully expanded broadcasted fields."
+                raise ValueError(msg)
             full_index = self._index_with_protected_axes(index, axes)
             cast("Any", values[name])[full_index] = candidate_values[name]
 

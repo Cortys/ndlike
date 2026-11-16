@@ -464,13 +464,17 @@ def test_ufunc_rejects_broadcasting_between_protected_shapes(reflected):
 
 @pytest.mark.parametrize("protected", [False, True])
 @pytest.mark.parametrize("shape", [(2, 4), (5, 2, 1)])
-def test_ufunc_output_cannot_expand_protected_or_batch_dimensions(protected, shape):
+def test_ufunc_output_uses_native_broadcasting_with_protected_layout_checks(protected, shape):
     x = _SingleProtected(np.ones((2, 1)))
     storage = np.zeros(shape)
     out: Any = _SingleProtected(storage) if protected else storage
-    with pytest.raises(ValueError, match=r"protected trailing|result shape"):
-        np.add(x, 2, out=out)
-    np.testing.assert_array_equal(storage, np.zeros(shape))
+    if protected and shape[-1] != 1:
+        with pytest.raises(ValueError, match="protected trailing"):
+            np.add(x, 2, out=out)
+        np.testing.assert_array_equal(storage, np.zeros(shape))
+    else:
+        assert np.add(x, 2, out=out) is out
+        np.testing.assert_array_equal(storage, np.full(shape, 3))
 
 
 def test_ufunc_validates_later_output_fields_before_writing():
@@ -482,7 +486,7 @@ def test_ufunc_validates_later_output_fields_before_writing():
     np.testing.assert_array_equal(out.right, np.zeros((2, 4)))
 
 
-def test_ufunc_output_does_not_hide_inconsistent_result_batch_shapes():
+def test_ufunc_output_supplies_native_broadcast_shape():
     @dataclass(frozen=True)
     class Mixed(NumpyAxisProtected):
         first: np.ndarray
@@ -492,16 +496,16 @@ def test_ufunc_output_does_not_hide_inconsistent_result_batch_shapes():
 
     x = Mixed(np.ones((1, 3)), np.ones((1, 2, 3)))
     out: Any = Mixed(np.zeros((2, 3)), np.zeros((2, 2, 3)))
-    with pytest.raises(ValueError, match="inconsistent batch-shapes"):
-        np.add(x, np.ones((2, 3)), out=out)
-    np.testing.assert_array_equal(out.first, np.zeros((2, 3)))
+    assert np.add(x, np.ones((2, 3)), out=out) is out
+    np.testing.assert_array_equal(out.first, np.full((2, 3), 2))
+    np.testing.assert_array_equal(out.second, np.full((2, 2, 3), 2))
 
 
-def test_multi_output_ufunc_validates_every_destination_before_writing():
+def test_multi_output_ufunc_uses_native_destination_validation():
     x = _SingleProtected(np.full((2, 3), 1.5))
     first = np.zeros((2, 3))
     second = np.zeros((4, 2, 3))
-    with pytest.raises(ValueError, match="result shape"):
+    with pytest.raises(ValueError, match=r"(broadcast|dimensions)"):
         np.modf(x, out=(first, second))
     np.testing.assert_array_equal(first, np.zeros((2, 3)))
     np.testing.assert_array_equal(second, np.zeros((4, 2, 3)))
@@ -533,7 +537,7 @@ def test_ufunc_reduction_outputs_match_result_shapes(method, keepdims):
     assert operation(x, *args, out=out, **kwargs) is out
     np.testing.assert_array_equal(out.array, expected)
     bad = np.zeros((5, *expected.shape))
-    with pytest.raises(ValueError, match="result shape"):
+    with pytest.raises(ValueError, match=r"(broadcast|dimensions)"):
         operation(x, *args, out=bad, **kwargs)
     np.testing.assert_array_equal(bad, np.zeros_like(bad))
 
@@ -551,6 +555,5 @@ def test_generalized_ufunc_output_uses_native_core_axis_shape_rules():
     assert operation(x, x, axis=0, out=out) is out
     np.testing.assert_array_equal(out, np.full(3, 2.0))
     bad = np.zeros(2)
-    with pytest.raises(ValueError, match="modified protected trailing axes"):
-        operation(x, x, out=bad)
-    np.testing.assert_array_equal(bad, np.zeros(2))
+    assert operation(x, x, out=bad) is bad
+    np.testing.assert_array_equal(bad, np.full(2, 3))

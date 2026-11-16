@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Never, Self, cast, ove
 import numpy as np
 from numpy.typing import NDArray
 
+from ndlike._batch import is_basic_index, normalize_broadcast_index
 from ndlike.array_like import (
     AnyNumpyLike,
     ArrayAPIVersion,
@@ -31,10 +32,11 @@ from ndlike.protected_axis._common import (
     value_shape,
 )
 from ndlike.protected_axis.numpy_functions import (
+    _broadcast_batch,
+    _broadcast_values,
     numpy_function,
     protected_comparison_ufunc,
     protected_matmul_ufunc,
-    validate_ufunc_outputs,
     validate_ufunc_protected_shapes,
 )
 
@@ -265,11 +267,25 @@ class NumpyAxisProtected[
     def __getitem__(self, index: ToIndices, /) -> ShapeResultT:
         require_effective_fields(self._effective_protected_axes)
         values = self.protected_values()
+        logical_shape = self._protected_batch_shape(values)
         indexed: dict[str, NumpyProtectedValue] = {}
 
         for name, axes in self._effective_protected_axes.items():
-            full_index = self._index_with_protected_axes(index, axes)
-            result = values[name][full_index]
+            value = values[name]
+            field_index = index
+            current = batch_shape(value_shape(value), axes)
+            if name in type(self).broadcasted_batch and current != logical_shape:
+                if is_basic_index(
+                    index,
+                    lambda item: (
+                        isinstance(item, np.ndarray) and item.ndim == 0 and np.issubdtype(item.dtype, np.integer)
+                    ),
+                ):
+                    field_index = normalize_broadcast_index(index, current, logical_shape)
+                else:
+                    value = _broadcast_batch(value, axes, logical_shape)
+            full_index = self._index_with_protected_axes(field_index, axes)
+            result = value[full_index]
 
             if axes == 0 and not hasattr(result, "ndim"):
                 result = np.asarray(result)
@@ -293,8 +309,11 @@ class NumpyAxisProtected[
         prepared = self._prepare_assignment_value(value)
         values = self.protected_values()
         candidate_values = self._coerce_assignment_value(prepared)
-
+        logical_shape = self._protected_batch_shape(values)
         for name, axes in self._effective_protected_axes.items():
+            if name in self.broadcasted_batch and batch_shape(value_shape(values[name]), axes) != logical_shape:
+                msg = "Indexed assignment requires fully expanded broadcasted fields."
+                raise ValueError(msg)
             full_index = self._index_with_protected_axes(index, axes)
             cast("Any", values[name])[full_index] = candidate_values[name]
 
@@ -339,13 +358,15 @@ class NumpyAxisProtected[
                 val = value.protected_values(ufunc, method)
                 if val is None:
                     return NotImplemented
-                input_values.append(val)
+                input_values.append(_broadcast_values(value, val))
             else:
                 input_values.append(None)
         self_values = self.protected_values(ufunc, method)
 
         if self_values is None:
             return NotImplemented
+
+        self_values = _broadcast_values(self, self_values)
 
         out = kwargs.get("out")
         out_items = out if isinstance(out, tuple) else ((out,) if out is not None else ())
@@ -433,9 +454,6 @@ class NumpyAxisProtected[
                     field_input_items = field_input_items[:2]
 
             field_calls[name] = (field_input_items, field_kwargs)
-
-        if any(item is not None for item in out_items):
-            validate_ufunc_outputs(ufunc, method, field_calls, protected_axes, self_values)
 
         for name, (field_input_items, field_kwargs) in field_calls.items():
             axes_count = protected_axes[name]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, replace
 from functools import wraps
 from inspect import BoundArguments, signature
 import math
@@ -40,12 +40,14 @@ class _AxisProtectedBase[V, R](metaclass=ABCMeta):
     """
 
     protected_axes: ClassVar[dict[str, int]]
+    broadcasted_batch: ClassVar[set[str]] = set()
     permitted_functions: ClassVar[set[Callable[..., Any]]]
     _effective_protected_axes: ClassVar[EffectiveProtectedAxes] = EffectiveProtectedAxes()
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
         cls.protected_axes = inherit_protected_axes(cls)
+        cls.broadcasted_batch = inherit_broadcasted_batch(cls)
         # Each subclass resolves its own layout after decorators have completed.
         cls._effective_protected_axes = EffectiveProtectedAxes()
 
@@ -143,6 +145,22 @@ def inherit_protected_axes(cls: type) -> dict[str, int]:
                 raise TypeError(msg)
             axes[name] = value
     return {name: count for name, count in axes.items() if name not in local_axes} | local_axes
+
+
+def inherit_broadcasted_batch(cls: type[_AxisProtectedBase]) -> set[str]:
+    """Merge base and local broadcast markers, validating against the resolved layout."""
+    broadcasted: set[str] = set()
+    declarations = [getattr(base, "broadcasted_batch", set()) for base in cls.__bases__]
+    declarations.append(vars(cls).get("broadcasted_batch", set()))
+    for declaration in declarations:
+        if not isinstance(declaration, set):
+            msg = f"{cls.__name__}.broadcasted_batch must be a set of protected field names."
+            raise TypeError(msg)
+        broadcasted.update(declaration)
+    if not broadcasted <= cls.protected_axes.keys():
+        msg = f"{cls.__name__}.broadcasted_batch must be a set of protected field names."
+        raise TypeError(msg)
+    return broadcasted
 
 
 class AxisProtectedCreator[V, R](Protocol):
@@ -274,6 +292,48 @@ def apply_unary[V, R](internals: AxisProtectedInternals[V, R], op: Callable[[str
     """Transform protected fields and rebuild, trusting the operation's layout."""
     results = {name: op(name, value, internals.protected_axes[name]) for name, value in internals.values.items()}
     return internals.create(results)
+
+
+def prepare_broadcasted_batch[V, R](
+    internals: AxisProtectedInternals[V, R],
+    *,
+    shape_only: bool,
+    value_only: bool,
+    broadcast: Callable[[V, int, tuple[int, ...]], V],
+    reshape: Callable[[V, tuple[int, ...]], V],
+) -> AxisProtectedInternals[V, R]:
+    """Expand logical batches, preserving singleton storage when a native field carries shape."""
+    if not internals.broadcasted_batch or value_only:
+        return internals
+    values = {}
+    for name, value in internals.values.items():
+        axes = internals.protected_axes[name]
+        if (
+            shape_only
+            and len(internals.broadcasted_batch) < len(internals.protected_axes)
+            and name in internals.broadcasted_batch
+            and math.prod(batch_shape(value_shape(value), axes)) == 1
+        ):
+            suffix = protected_shape(value_shape(value), axes)
+            values[name] = value if value_ndim(value) == axes else reshape(value, suffix)
+        else:
+            values[name] = broadcast(value, axes, internals.batch_shape)
+    return replace(internals, values=values)
+
+
+def apply_shape_only[V, R](internals: AxisProtectedInternals[V, R], op: Callable[[str, V, int], V]) -> R:
+    """Transform batches while retaining normalized singleton broadcast fields."""
+
+    def field_op(name: str, value: V, axes: int) -> V:
+        if (
+            len(internals.broadcasted_batch) < len(internals.protected_axes)
+            and name in internals.broadcasted_batch
+            and value_ndim(value) == axes
+        ):
+            return value
+        return op(name, value, axes)
+
+    return apply_unary(internals, field_op)
 
 
 def extract_protected_value_sequence_internals[V, R](

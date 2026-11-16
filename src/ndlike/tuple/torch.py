@@ -1,0 +1,132 @@
+"""PyTorch broadcast tuples with opaque heterogeneous members."""
+
+from __future__ import annotations
+
+import math
+from typing import TYPE_CHECKING, Any, Self, cast
+
+import numpy as np
+import torch
+
+from ndlike.torch_like import TorchLikeImplementation, to_torch_like
+from ndlike.tuple._common import BroadcastTuple, tuple_function
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from types import ModuleType
+
+    from ndlike.torch_like import AnyTorchLike
+
+
+class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
+    BroadcastTuple[Members],
+    TorchLikeImplementation[
+        "TorchBroadcastTuple[Members]",
+        object,
+        "TorchBroadcastTuple[Members]",
+        object,
+        "TorchBroadcastTuple[Members]",
+        "TorchBroadcastTuple[tuple[Any, ...]]",
+    ],
+):
+    """A nonempty collection exposing the broadcast shape of its Torch-like members.
+
+    Functions pass through to corresponding members, preserving native dispatch
+    and gradients. Use ``members`` to access stored representations, and indexing
+    to select or update the logical batch.
+    """
+
+    def __torch_like__(
+        self,
+        dtype: torch.dtype | None = None,
+        /,
+        *,
+        device: torch.device | str | None = None,
+        copy: bool = False,
+    ) -> Self:
+        """Return self by default, forwarding explicit conversion options to members."""
+        if dtype is None and device is None and not copy:
+            return self
+        return self._map_members(lambda member: to_torch_like(member, dtype, device=device, copy=copy))
+
+    def __post_init__(self) -> None:
+        """Require native or dispatched members so shaping cannot coerce representations."""
+        super().__post_init__()
+        for member in self.members:
+            if not isinstance(member, torch.Tensor) and not callable(getattr(type(member), "__torch_function__", None)):
+                msg = "Torch tuple members must be tensors or implement __torch_function__."
+                raise TypeError(msg)
+
+    @staticmethod
+    def _broadcast_member[V: AnyTorchLike | torch.Tensor](member: V, shape: tuple[int, ...]) -> V:
+        return cast("V", torch.broadcast_to(cast("Any", member), shape))
+
+    @staticmethod
+    def _is_scalar_integer(value: object) -> bool:
+        return (
+            isinstance(value, torch.Tensor)
+            and value.ndim == 0
+            and value.dtype in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8)
+        ) or (isinstance(value, np.ndarray) and value.ndim == 0 and np.issubdtype(value.dtype, np.integer))
+
+    def __array_namespace__(self, /, *, api_version: str | None = None) -> ModuleType:
+        """Return the representative member's namespace when available."""
+        namespace = getattr(self.members[0], "__array_namespace__", None)
+        if namespace is None:
+            msg = "Underlying tensor does not support __array_namespace__."
+            raise NotImplementedError(msg)
+        return namespace(api_version=api_version)
+
+    @property
+    def mT(self) -> Self:  # noqa: N802
+        """Swap the last two logical batch axes."""
+        if self.ndim < 2:
+            msg = "mT requires at least two dimensions."
+            raise ValueError(msg)
+        return cast("Self", self.transpose(-2, -1))
+
+    @property
+    def mH(self) -> Self:  # noqa: N802
+        """Conjugate and transpose the last two logical batch axes."""
+        return cast("Self", torch.adjoint(cast("Any", self)))
+
+    def numpy(self, *, force: bool = False) -> np.ndarray:
+        """Reject conversion of multiple representations into one array."""
+        del force
+        return self.__array__()
+
+    def to(self, *args: Any, **kwargs: Any) -> Self:  # noqa: ANN401
+        """Move or cast each member through its own implementation."""
+        return self._map_members(lambda member: member.to(*args, **kwargs))
+
+    def detach(self) -> Self:
+        """Detach each member without expanding compact storage."""
+        return self._map_members(lambda member: member.detach())
+
+    def reshape(self, *shape: int | tuple[int, ...]) -> Self:
+        """Reshape the common logical batch."""
+        target = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
+        return cast("Self", torch.reshape(cast("Any", self), cast("Any", target)))
+
+    def squeeze(self, dim: int | tuple[int, ...] | None = None) -> Self:
+        """Remove singleton logical batch dimensions."""
+        return (
+            cast("Self", torch.squeeze(cast("Any", self), dim=dim))
+            if dim is not None
+            else cast("Self", torch.squeeze(cast("Any", self)))
+        )
+
+    @classmethod
+    def __torch_function__(
+        cls,
+        func: Callable,
+        types: tuple[type[Any], ...],
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> Any:  # noqa: ANN401
+        """Pass backend functions through to corresponding members."""
+        del types
+        if func is torch.numel:
+            value = args[0] if args else (kwargs or {})["input"]
+            return math.prod(value.shape)
+        return tuple_function(cls, func, args, {} if kwargs is None else kwargs)

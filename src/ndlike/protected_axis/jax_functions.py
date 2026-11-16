@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-import math
 from typing import TYPE_CHECKING, Any, cast
 
 from flextype import switchdispatch
@@ -41,9 +39,9 @@ from ndlike.protected_axis._common import (
     FunctionOverride,
     ProtectedValueSequenceInternals,
     _AxisProtectedBase,
+    apply_shape_only as _apply_shape_only,
     apply_structural_op as _apply_structural_op,
     apply_unary as _apply_unary,
-    batch_shape,
     extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
     flattened_batch_shape,
@@ -54,6 +52,7 @@ from ndlike.protected_axis._common import (
     normalize_axes,
     normalize_axis,
     normalize_batch_reduction_axes as _normalize_batch_reduction_dims,
+    prepare_broadcasted_batch,
     protected_shape,
     validate_batch_sync,
     value_ndim,
@@ -118,47 +117,17 @@ def jax_axis_protected_internals(
         func,
         check_is_permitted=check_is_permitted,
     )
-    if internals is None or not internals.broadcasted_batch or func in _VALUE_ONLY:
-        return internals
-
-    values = {}
-    for name, value in internals.values.items():
-        axes = internals.protected_axes[name]
-        if (
-            func in _SHAPE_ONLY
-            and len(internals.broadcasted_batch) < len(internals.protected_axes)
-            and name in internals.broadcasted_batch
-            and math.prod(batch_shape(value_shape(value), axes)) == 1
-        ):
-            suffix = protected_shape(value_shape(value), axes)
-            values[name] = (
-                value
-                if value_ndim(value) == axes
-                else _apply_structural_op(
-                    value,
-                    lambda field_value, target=suffix: jax_reshape(field_value, target),
-                    lambda field_value, target=suffix: np.reshape(field_value, target),
-                )
-            )
-        else:
-            values[name] = _broadcast_batch(value, axes, internals.batch_shape)
-    return replace(internals, values=values)
-
-
-def _apply_shape_only(
-    internals: JaxAxisProtectedInternals,
-    op: Callable[[str, JaxProtectedValue, int], JaxProtectedValue],
-) -> Any:  # noqa: ANN401
-    """Apply a batch-shape operation, reusing fields normalized to batch shape ``()``."""
-    if not internals.broadcasted_batch or len(internals.broadcasted_batch) == len(internals.protected_axes):
-        return _apply_unary(internals, op)
-
-    def field_op(name: str, value: JaxProtectedValue, axes: int) -> JaxProtectedValue:
-        if name in internals.broadcasted_batch and value_ndim(value) == axes:
-            return value
-        return op(name, value, axes)
-
-    return _apply_unary(internals, field_op)
+    if internals is None:
+        return None
+    return prepare_broadcasted_batch(
+        internals,
+        shape_only=func in _SHAPE_ONLY,
+        value_only=func in _VALUE_ONLY,
+        broadcast=_broadcast_batch,
+        reshape=lambda value, shape: _apply_structural_op(
+            value, lambda v: jax_reshape(v, shape), lambda v: np.reshape(v, shape)
+        ),
+    )
 
 
 def _extract_protected_value_sequence_internals(

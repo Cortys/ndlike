@@ -15,6 +15,7 @@ from ndlike.protected_axis._common import (
     FunctionOverride,
     ProtectedValueSequenceInternals,
     _AxisProtectedBase,
+    apply_shape_only as _apply_shape_only,
     apply_unary as _apply_unary,
     extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
@@ -25,6 +26,7 @@ from ndlike.protected_axis._common import (
     normalize_axes,
     normalize_axis,
     normalize_batch_reduction_axes as _normalize_batch_reduction_axes,
+    prepare_broadcasted_batch,
     protected_shape,
     require_effective_fields,
     validate_batch_sync,
@@ -47,17 +49,56 @@ type NumpyAxisProtectedInternals = AxisProtectedInternals[NumpyProtectedValue, A
 type _NumpyBoundFunctionWithInternals = BoundFunctionWithInternals[NumpyProtectedValue, Any]
 
 
+_SHAPE_ONLY = frozenset(
+    (
+        np.reshape,
+        np.transpose,
+        np.matrix_transpose,
+        np.swapaxes,
+        np.moveaxis,
+        np.squeeze,
+        np.expand_dims,
+        np.broadcast_to,
+    )
+)
+_VALUE_ONLY = frozenset((np.copy, np.astype))
+
+
+def _broadcast_batch(value: NumpyProtectedValue, axes: int, shape: tuple[int, ...]) -> NumpyProtectedValue:
+    """Broadcast a field's batch while retaining its protected suffix."""
+    target = (*shape, *protected_shape(value_shape(value), axes))
+    return value if value_shape(value) == target else np.broadcast_to(value, target)
+
+
+def _broadcast_values(
+    obj: AnyNumpyAxisProtected, values: dict[str, NumpyProtectedValue]
+) -> dict[str, NumpyProtectedValue]:
+    """Prepare ufunc operands using the same logical batch as structural dispatch."""
+    if not obj.broadcasted_batch:
+        return values
+    shape = obj._protected_batch_shape()  # noqa: SLF001
+    return {
+        name: _broadcast_batch(value, obj._effective_protected_axes[name], shape)  # noqa: SLF001
+        for name, value in values.items()
+    }
+
+
 def numpy_axis_protected_internals(
-    obj: object, func: Callable | None = None, *, check_is_permitted: bool = False
+    obj: object, func: Callable | None = None, *, check_is_permitted: bool = False, broadcast: bool = True
 ) -> NumpyAxisProtectedInternals | None:
     """Extract protected-axis internals from object."""
     if not isinstance(obj, _AxisProtectedBase):
         return None
     # Dispatch establishes the backend value family.
-    return extract_axis_protected_internals(
-        obj,
-        func,
-        check_is_permitted=check_is_permitted,
+    internals = extract_axis_protected_internals(obj, func, check_is_permitted=check_is_permitted)
+    if internals is None or not broadcast:
+        return internals
+    return prepare_broadcasted_batch(
+        internals,
+        shape_only=func in _SHAPE_ONLY,
+        value_only=func in _VALUE_ONLY,
+        broadcast=_broadcast_batch,
+        reshape=np.reshape,
     )
 
 
@@ -144,7 +185,7 @@ def protected_batch_reduction_function(  # noqa: PLR0912
 ) -> Any:  # noqa: ANN401
     axis = params.arguments.get("axis", None)
     out = params.arguments.get("out", None)
-    out_internals = numpy_axis_protected_internals(out, None)
+    out_internals = numpy_axis_protected_internals(out, broadcast=False)
     if out_internals is not None and out_internals.protected_axes != internals.protected_axes:
         msg = "out must use the same protected_axes layout as input values."
         raise ValueError(msg)
@@ -223,7 +264,7 @@ def protected_transpose_function(
         full_axes = _map_batch_axes(value, axes_count, batch_axes)
         return func(value, axes=full_axes)
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @numpy_function.register(np.matrix_transpose)
@@ -246,7 +287,7 @@ def protected_matrix_transpose_function(
         full_axes = _map_batch_axes(value, axes_count, tuple(batch_axes))
         return np.transpose(value, axes=full_axes)
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @numpy_function.register(np.reshape)
@@ -278,7 +319,7 @@ def protected_reshape_function(
             kwargs["copy"] = copy
         return func(value, target_shape, **kwargs)
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @numpy_function.register(np.expand_dims)
@@ -302,7 +343,7 @@ def protected_expand_dims_function(
         full_axes = normalize_axes(axis_tuple, batch_ndim + len(axis_tuple) - 1, allow_endpoint=True)
         return func(value, axis=full_axes)
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @numpy_function.register(np.squeeze)
@@ -333,7 +374,7 @@ def protected_squeeze_function(
 
         return func(value, axis=squeeze_axes)
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @numpy_function.register(np.swapaxes)
@@ -355,7 +396,7 @@ def protected_swapaxes_function(
         full_axis2 = normalize_axis(axis2, batch_ndim)
         return func(value, full_axis1, full_axis2)
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @numpy_function.register(np.moveaxis)
@@ -396,7 +437,7 @@ def protected_moveaxis_function(
         destination_arg: int | tuple[int, ...] = mapped_destination[0] if destination_was_int else mapped_destination
         return func(value, source=source_arg, destination=destination_arg)
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @numpy_function.register(np.concatenate)
@@ -410,7 +451,7 @@ def protected_concatenate_function(
     axis = kwargs.get("axis", args[1] if len(args) > 1 else 0)
     out = kwargs.get("out", args[2] if len(args) > 2 else None)
 
-    out_internals = numpy_axis_protected_internals(out, None)
+    out_internals = numpy_axis_protected_internals(out, broadcast=False)
     sequence = _extract_protected_value_sequence_internals(values, None)
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
@@ -472,7 +513,7 @@ def protected_stack_function(
     axis = params.arguments.get("axis", 0)
     out = params.arguments.get("out", None)
 
-    out_internals = numpy_axis_protected_internals(out, None)
+    out_internals = numpy_axis_protected_internals(out, broadcast=False)
     sequence = _extract_protected_value_sequence_internals(values, None)
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
@@ -559,74 +600,18 @@ def validate_ufunc_protected_shapes(
                 raise ValueError(msg)
 
 
-def _ufunc_result_shapes(
-    ufunc: np.ufunc, method: str, args: list[Any], options: dict[str, Any]
-) -> tuple[tuple[int, ...], ...]:
-    if method == "__call__":
-        if ufunc.signature is not None:
-            # Generalized ufuncs can have arbitrary core-axis rules. Matmul uses
-            # its dedicated handler; defer other signatures to the native ufunc.
-            result = ufunc(*args, **{key: value for key, value in options.items() if key != "out"})
-            items = result if ufunc.nout > 1 else (result,)
-            return tuple(value_shape(value) for value in items)
-        shapes = [np.shape(value) for value in args]
-        if "where" in options:
-            shapes.append(np.shape(options["where"]))
-        return (np.broadcast_shapes(*shapes),) * ufunc.nout
-
-    shape = value_shape(args[0])
-    axis = options["axis"]
-    if method == "reduce":
-        dims = (axis,) if isinstance(axis, int) else axis
-        return (
-            tuple(
-                1 if index in dims else size
-                for index, size in enumerate(shape)
-                if options.get("keepdims", False) or index not in dims
-            ),
-        )
-    if method == "reduceat":
-        shape = (*shape[:axis], len(args[1]), *shape[axis + 1 :])
-    return (shape,)
-
-
-def validate_ufunc_outputs(
-    ufunc: np.ufunc,
-    method: str,
-    calls: dict[str, tuple[list[Any], dict[str, Any]]],
-    axes: dict[str, int],
-    reference: dict[str, NumpyProtectedValue],
-) -> None:
-    """Validate every result and destination shape before the first field writes."""
-    batch_shapes: dict[int, tuple[int, ...]] = {}
-    for name, (args, options) in calls.items():
-        shapes = _ufunc_result_shapes(ufunc, method, args, options)
-        out = options["out"]
-        outputs = out if isinstance(out, tuple) else (out,)
-        count = axes[name]
-        for index, (shape, output) in enumerate(zip(shapes, outputs, strict=True)):
-            if protected_shape(shape, count) != protected_shape(value_shape(reference[name]), count):
-                msg = f"Ufunc operation modified protected trailing axes for field {name!r}."
-                raise ValueError(msg)
-            batch = shape[:-count] if count else shape
-            if batch_shapes.setdefault(index, batch) != batch:
-                msg = "Ufunc operation produced inconsistent batch-shapes across protected fields."
-                raise ValueError(msg)
-            if output is not None and value_shape(output) != shape:
-                msg = f"out must match the ufunc result shape for field {name!r}."
-                raise ValueError(msg)
-
-
 def _operator_inputs(
     owner: AnyNumpyAxisProtected,
     operands: tuple[object, ...],
     reference: dict[str, NumpyProtectedValue],
     func: np.ufunc,
+    *,
+    has_output: bool = False,
 ) -> list[dict[str, NumpyProtectedValue] | None] | None:
     """Check permission, concrete type, and protected shapes for every operand."""
     axes = owner._effective_protected_axes  # noqa: SLF001
     inputs: list[dict[str, NumpyProtectedValue] | None] = []
-    for value in operands:
+    for index, value in enumerate(operands):
         if not isinstance(value, _AxisProtectedBase):
             inputs.append(None)
             continue
@@ -639,6 +624,8 @@ def _operator_inputs(
         values = protected.protected_values(func, "__call__")
         if values is None:
             return None
+        if not has_output or index < len(operands) - 1:
+            values = _broadcast_values(protected, values)
         for name, count in axes.items():
             if protected_shape(value_shape(values[name]), count) != protected_shape(
                 value_shape(reference[name]), count
@@ -659,22 +646,14 @@ def _validate_operator_fields(
             raise ValueError(msg)
 
 
-def _matmul_out_values(out: object, results: dict[str, Any]) -> dict[str, Any]:
+def _matmul_out_values(out: object, axes: dict[str, int]) -> dict[str, Any]:
     if isinstance(out, _AxisProtectedBase):
         values = out.protected_values()
-    elif len(results) == 1:
-        values = dict.fromkeys(results, out)
+    elif len(axes) == 1:
+        values = dict.fromkeys(axes, out)
     else:
         msg = "non-protected out is only supported for single-field protected objects."
         raise TypeError(msg)
-    for name, result in results.items():
-        value = values[name]
-        if value_shape(value) != value_shape(result):
-            msg = f"out must match the matmul result shape for field {name!r}."
-            raise ValueError(msg)
-        if isinstance(value, np.ndarray) and not value.flags.writeable:
-            msg = f"out is read-only for field {name!r}."
-            raise ValueError(msg)
     return values
 
 
@@ -751,7 +730,7 @@ def protected_matmul_ufunc(
         msg = "matmul core-axis overrides are unsupported for protected arrays; transpose the visible axes instead."
         raise ValueError(msg)
     participants = (*operands, out) if isinstance(out, _AxisProtectedBase) else operands
-    inputs = _operator_inputs(owner, participants, reference, np.matmul)
+    inputs = _operator_inputs(owner, participants, reference, np.matmul, has_output=len(participants) > len(operands))
     if inputs is None:
         return NotImplemented
     inputs = inputs[:2]
@@ -763,16 +742,13 @@ def protected_matmul_ufunc(
         counts = tuple(0 if values is None else axes[name] for values in inputs)
         return _matmul_field(field_args, counts, field_options)
 
+    if out is not None:
+        out_values = _matmul_out_values(out, axes)
+        for name, value in out_values.items():
+            apply(name, {**options, "out": value})
+        return out
     results = {name: apply(name, options) for name in axes}
     _validate_operator_fields(results, axes, reference, np.matmul)
-    if out is not None:
-        out_values = _matmul_out_values(out, results)
-        buffers = {
-            name: apply(name, {**options, "out": np.copy(value, subok=True)}) for name, value in out_values.items()
-        }
-        for name, value in out_values.items():
-            value[...] = buffers[name]
-        return out
     processed = {
         name: owner._postprocess_ufunc_result(value, ufunc=np.matmul, method="__call__")  # noqa: SLF001
         if isinstance(value, np.ndarray)
@@ -781,3 +757,16 @@ def protected_matmul_ufunc(
     }
     _validate_operator_fields(processed, axes, reference, np.matmul)
     return owner.with_protected_values(processed)
+
+
+@numpy_function.register(np.broadcast_to)
+@numpy_internals_override("array")
+def protected_broadcast_to_function(
+    func: Callable,
+    params: BoundArguments,
+    internals: NumpyAxisProtectedInternals,
+) -> Any:  # noqa: ANN401
+    """Broadcast visible batch axes without changing protected suffixes."""
+    del func
+    shape = tuple(params.arguments["shape"])
+    return _apply_shape_only(internals, lambda _name, value, axes: _broadcast_batch(value, axes, shape))

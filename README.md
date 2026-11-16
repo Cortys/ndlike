@@ -103,6 +103,43 @@ Otherwise, the helpers fall back to `numpy.asanyarray`, `torch.as_tensor`, and
 `jax.numpy.asarray`, respectively. NumPy retains `__array_like__` for backward
 compatibility and consistency with NumPy's `__array__`.
 
+## Broadcast tuples
+
+`ndlike.tuple` provides `NumpyBroadcastTuple`, `JaxBroadcastTuple`, and
+`TorchBroadcastTuple` in its `numpy`, `jax`, and `torch` submodules. These are
+nonempty, heterogeneous collections with one logical array shape:
+
+```python
+import numpy as np
+
+from ndlike.tuple.numpy import NumpyBroadcastTuple
+
+parts = NumpyBroadcastTuple((np.ones((2, 1)), np.arange(3), np.array(7)))
+assert parts.shape == (2, 3)
+```
+
+`.members` accesses the stored representations. Indexing, iteration, and `len`
+operate on the logical batch. Basic indexing preserves compact broadcasts;
+advanced indexing and structural functions expand members to the common shape
+before operating.
+
+Members must be native arrays of the selected backend or implement that backend's
+function dispatch protocol.
+
+The `__array_like__`, `__jax_like__`, and `__torch_like__` hooks convert members
+individually without expanding their shapes. JAX and Torch are imported on demand;
+conversion to the same backend returns the original tuple unless a `dtype`,
+`device`, or `copy=True` is requested.
+
+The generic parameter specifies the entire member tuple:
+`JaxBroadcastTuple[tuple[Game, Value]]` has `members: tuple[Game, Value]`, so
+`members[0]` is typed as `Game` and `members[1]` as `Value`. Construction infers
+these types, and shaping preserves them. Use `JaxBroadcastTuple[tuple[Game, ...]]`
+for arbitrarily many games, or `JaxBroadcastTuple[tuple[Game]]` for exactly one.
+NumPy and Torch use the same notation. Each backend bounds the member tuple to
+its native arrays or matching array-like protocol; NumPy also accepts its native
+array scalars.
+
 ## Protected axes
 
 Protected-axis base classes give structured objects array-like behavior over
@@ -144,6 +181,15 @@ shape; indexing and supported shape operations update them together. Dataclasses
 work out of the box; other classes must override `with_protected_values` to
 reconstruct results.
 
+`broadcasted_batch` names protected fields that may store a broadcastable batch
+shape instead of the full batch. For example, scalar weights can be shared across
+every vector without storing a weight per vector. Unmarked fields must share the
+object's batch shape; marked fields must broadcast to it. If all fields are
+marked, their combined broadcast determines the shape—for example, batch shapes
+`(2, 1)` and `(3,)` give `(2, 3)`. Protected trailing axes are excluded from this
+broadcasting. Indexing and shape operations preserve compact storage when possible
+and expand it when needed.
+
 Numerical operations are opt-in: use `permitted_functions` (for example,
 `{np.mean}`) and, for NumPy ufuncs, `permitted_ufuncs` (for example,
 `{np.add: ["__call__", "reduce"]}`). Supported reductions operate on batch axes,
@@ -153,9 +199,8 @@ The corresponding backend classes are `TorchAxisProtected` in
 `ndlike.protected_axis.torch` and `JaxAxisProtected` in
 `ndlike.protected_axis.jax`.
 
-For all three backends, `protected_axes` accumulates across base classes.
-Subclasses only need to declare additions. JAX's `broadcasted_batch` also
-accumulates; for example:
+For all three backends, `protected_axes` and `broadcasted_batch` accumulate across base classes.
+Subclasses only need to declare additions.
 
 ```python
 import jax

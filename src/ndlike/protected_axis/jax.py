@@ -11,6 +11,7 @@ import jax
 from jax import numpy as jnp
 import numpy as np
 
+from ndlike._batch import is_basic_index, normalize_broadcast_index as _normalize_broadcast_index
 from ndlike.jax_functions import (
     jax_conj,
     jax_reshape,
@@ -50,68 +51,14 @@ def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
         raise ValueError(msg)
 
 
-def _inherit_broadcasted_batch(cls: type[AnyJaxAxisProtected]) -> None:
-    """Merge inherited and local broadcast markers into an independent set."""
-    broadcasted_batch: set[str] = set()
-    declarations = [getattr(base, "broadcasted_batch", set()) for base in cls.__bases__]
-    declarations.append(vars(cls).get("broadcasted_batch", set()))
-    for declared_batch in declarations:
-        if not isinstance(declared_batch, set):
-            msg = f"{cls.__name__}.broadcasted_batch must be a set of protected field names."
-            raise TypeError(msg)
-        broadcasted_batch.update(declared_batch)
-    cls.broadcasted_batch = broadcasted_batch
-
-
 def _is_basic_index(index: ToIndices) -> bool:
     """Recognize shape-static basic indexing, including traced scalar integers."""
-    indices = index if isinstance(index, tuple) else (index,)
-    for item in indices:
-        if item is None or item is Ellipsis:
-            continue
-        if isinstance(item, slice):
-            if all(part is None or isinstance(part, (int, np.integer)) for part in (item.start, item.stop, item.step)):
-                continue
-            return False
-        if isinstance(item, (bool, np.bool_)):
-            return False
-        if isinstance(item, (int, np.integer)):
-            continue
-        if isinstance(item, (jax.Array, np.ndarray)) and item.ndim == 0 and np.issubdtype(item.dtype, np.integer):
-            continue
-        return False
-    return True
-
-
-def _normalize_broadcast_index(
-    index: ToIndices, value_batch_shape: tuple[int, ...], primary_batch_shape: tuple[int, ...]
-) -> tuple[Any, ...]:
-    """Project a known-basic logical batch index onto compact storage."""
-    index_tuple = index if isinstance(index, tuple) else (index,)
-    missing = len(primary_batch_shape) - sum(item is not None and item is not Ellipsis for item in index_tuple)
-    ellipses = sum(item is Ellipsis for item in index_tuple)
-    if missing < 0 or ellipses > 1:
-        msg = "Too many indices or ellipses for protected batch dimensions."
-        raise IndexError(msg)
-
-    normalized: list[Any] = []
-    for item in index_tuple:
-        normalized.extend((slice(None),) * missing if item is Ellipsis else (item,))
-    if ellipses == 0:
-        normalized.extend((slice(None),) * missing)
-
-    leading = len(primary_batch_shape) - len(value_batch_shape)
-    projected: list[Any] = []
-    axis = 0
-    for item in normalized:
-        if item is None:
-            projected.append(None)
-            continue
-        if axis >= leading:
-            shared = value_batch_shape[axis - leading] == 1 and primary_batch_shape[axis] != 1
-            projected.append((slice(None) if isinstance(item, slice) else 0) if shared else item)
-        axis += 1
-    return tuple(projected)
+    return is_basic_index(
+        index,
+        lambda item: (
+            isinstance(item, (jax.Array, np.ndarray)) and item.ndim == 0 and np.issubdtype(item.dtype, np.integer)
+        ),
+    )
 
 
 class JaxAxisProtected[
@@ -167,18 +114,12 @@ class JaxAxisProtected[
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
 
-        _inherit_broadcasted_batch(cls)
         if cls is JaxAxisProtected or isabstract(cls):
             return
 
         axes = cls.protected_axes
         if not axes:
             msg = f"{cls.__name__} must define protected_axes as a non-empty dict[str, int]."
-            raise TypeError(msg)
-
-        broadcasted_batch = cls.broadcasted_batch
-        if not broadcasted_batch <= axes.keys():
-            msg = f"{cls.__name__}.broadcasted_batch must be a set of protected field names."
             raise TypeError(msg)
 
         cls.primary_protected_name = primary_protected_name(axes)

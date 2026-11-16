@@ -15,6 +15,7 @@ from ndlike.protected_axis._common import (
     FunctionOverride as _TorchFunction,
     ProtectedValueSequenceInternals,
     _AxisProtectedBase,
+    apply_shape_only as _apply_shape_only,
     apply_structural_op as _apply_structural_op,
     apply_unary as _apply_unary,
     coerce_axis_tuple,
@@ -25,6 +26,7 @@ from ndlike.protected_axis._common import (
     normalize_axes,
     normalize_axis,
     normalize_batch_reduction_axes,
+    prepare_broadcasted_batch,
     protected_shape,
     require_effective_fields,
     validate_batch_sync,
@@ -45,17 +47,49 @@ type TorchAxisProtectedCreator = AxisProtectedCreator[TorchProtectedValue, Any]
 type TorchAxisProtectedInternals = AxisProtectedInternals[TorchProtectedValue, Any]
 
 
+_SHAPE_ONLY = frozenset(
+    (
+        torch.reshape,
+        torch.transpose,
+        torch.permute,
+        torch.movedim,
+        torch.moveaxis,
+        torch.squeeze,
+        torch.unsqueeze,
+        torch.broadcast_to,
+    )
+)
+_VALUE_ONLY = frozenset((torch.clone, torch.conj))
+
+
+def _broadcast_batch(value: TorchProtectedValue, axes: int, shape: tuple[int, ...]) -> TorchProtectedValue:
+    """Broadcast a field's batch while retaining its protected suffix."""
+    target = (*shape, *protected_shape(value_shape(value), axes))
+    if value_shape(value) == target:
+        return value
+    return _apply_structural_op(
+        value, lambda v: torch.broadcast_to(cast("Any", v), target), lambda v: np.broadcast_to(v, target)
+    )
+
+
 def torch_axis_protected_internals(
-    obj: object, func: Callable | None = None, *, check_is_permitted: bool = False
+    obj: object, func: Callable | None = None, *, check_is_permitted: bool = False, broadcast: bool = True
 ) -> TorchAxisProtectedInternals | None:
     """Extract protected-axis internals from object."""
     if not isinstance(obj, _AxisProtectedBase):
         return None
     # Dispatch establishes the backend value family.
-    return extract_axis_protected_internals(
-        obj,
-        func,
-        check_is_permitted=check_is_permitted,
+    internals = extract_axis_protected_internals(obj, func, check_is_permitted=check_is_permitted)
+    if internals is None or not broadcast:
+        return internals
+    return prepare_broadcasted_batch(
+        internals,
+        shape_only=func in _SHAPE_ONLY,
+        value_only=func in _VALUE_ONLY,
+        broadcast=_broadcast_batch,
+        reshape=lambda value, shape: _apply_structural_op(
+            value, lambda v: torch.reshape(cast("Any", v), shape), lambda v: np.reshape(v, shape)
+        ),
     )
 
 
@@ -219,32 +253,6 @@ def protected_clone_function(
     return _apply_unary(internals, lambda _name, value, _axes: func(value, memory_format=memory_format))
 
 
-def _validate_reduction_out(
-    func: Callable,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    internals: TorchAxisProtectedInternals,
-    out_internals: TorchAxisProtectedInternals | None,
-) -> None:
-    out = kwargs.get("out")
-    if out is None:
-        return
-    dim = args[1] if len(args) > 1 else kwargs.get("dim", kwargs.get("axis"))
-    keepdim_index = 3 if func in (torch.std, torch.var) else 2
-    keepdim = args[keepdim_index] if len(args) > keepdim_index else kwargs.get("keepdim", kwargs.get("keepdims", False))
-    for name, count in internals.protected_axes.items():
-        shape = value_shape(internals.values[name])
-        mapped = _normalize_batch_reduction_dims(dim, len(shape) - count)
-        dims = (mapped,) if isinstance(mapped, int) else mapped
-        expected = tuple(
-            1 if index in dims else size for index, size in enumerate(shape) if keepdim or index not in dims
-        )
-        value = out if out_internals is None else out_internals.values[name]
-        if value_shape(value) != expected:
-            msg = f"out must match the reduction result shape for field {name!r}."
-            raise ValueError(msg)
-
-
 def _reduction_sample_axis(
     func: Callable, args: list[Any], kwargs: dict[str, Any], dim: int | tuple[int, ...]
 ) -> int | tuple[int, ...]:
@@ -275,7 +283,7 @@ def protected_batch_reduction_function(  # noqa: PLR0912
 
     dim = args[1] if len(args) > 1 else kwargs.get("dim", kwargs.get("axis"))
     out = kwargs.get("out")
-    out_internals = torch_axis_protected_internals(out)
+    out_internals = torch_axis_protected_internals(out, broadcast=False)
     if out_internals is not None and out_internals.protected_axes != internals.protected_axes:
         msg = "out must use the same protected_axes layout as input values."
         raise ValueError(msg)
@@ -284,7 +292,6 @@ def protected_batch_reduction_function(  # noqa: PLR0912
         msg = "non-protected out is only supported for single-field protected objects."
         raise TypeError(msg)
 
-    _validate_reduction_out(func, args, kwargs, internals, out_internals)
     mutable_args = list(args)
     mutable_kwargs = dict(kwargs)
     results: dict[str, TorchProtectedValue] = {}
@@ -387,7 +394,7 @@ def protected_transpose_function(
             lambda field_value: np.swapaxes(field_value, full_dim0, full_dim1),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @torch_function.register(torch.permute)
@@ -417,7 +424,7 @@ def protected_permute_function(
             lambda field_value: np.transpose(field_value, axes=full_dims),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @torch_function.register(torch.adjoint)
@@ -473,7 +480,7 @@ def protected_reshape_function(
             lambda field_value: np.reshape(field_value, target_shape),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @torch_function.register(torch.unsqueeze)
@@ -497,7 +504,7 @@ def protected_unsqueeze_function(
             lambda field_value: np.expand_dims(field_value, axis=full_dim),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @torch_function.register(torch.squeeze)
@@ -536,7 +543,7 @@ def protected_squeeze_function(
             result = func(result, dim=axis)
         return result
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @torch_function.multi_register([torch.movedim, torch.moveaxis])
@@ -582,7 +589,7 @@ def protected_movedim_function(
             lambda field_value: np.moveaxis(field_value, source_arg, destination_arg),
         )
 
-    return _apply_unary(internals, op)
+    return _apply_shape_only(internals, op)
 
 
 @torch_function.multi_register([torch.cat, torch.concat, torch.concatenate])
@@ -599,7 +606,7 @@ def protected_cat_function(
     dim = mutable_kwargs.get("dim", mutable_args[1] if len(mutable_args) > 1 else 0)
     out = mutable_kwargs.get("out")
 
-    out_internals = torch_axis_protected_internals(out)
+    out_internals = torch_axis_protected_internals(out, broadcast=False)
     sequence = _extract_protected_value_sequence_internals(values)
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
@@ -662,7 +669,7 @@ def protected_gather_function(
         msg = "gather index must have the same ndim as the protected object's batch dimensions."
         raise ValueError(msg)
 
-    out_internals = torch_axis_protected_internals(out)
+    out_internals = torch_axis_protected_internals(out, broadcast=False)
     if out_internals is not None and out_internals.protected_axes != internals.protected_axes:
         msg = "out must use the same protected_axes layout as input values."
         raise ValueError(msg)
@@ -708,7 +715,7 @@ def protected_stack_function(
     dim = mutable_kwargs.get("dim", mutable_args[1] if len(mutable_args) > 1 else 0)
     out = mutable_kwargs.get("out")
 
-    out_internals = torch_axis_protected_internals(out)
+    out_internals = torch_axis_protected_internals(out, broadcast=False)
     sequence = _extract_protected_value_sequence_internals(values)
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
@@ -793,13 +800,13 @@ def _operator_arguments(
 
 
 def _operator_inputs(
-    func: Callable, args: tuple[object, ...]
+    func: Callable, args: tuple[object, ...], *, has_output: bool = False
 ) -> tuple[Any, TorchAxisProtectedInternals, list[TorchAxisProtectedInternals | None]] | None:
     """Check permissions and align every protected operand, including output."""
     owner: Any = None
     template: TorchAxisProtectedInternals | None = None
     inputs: list[TorchAxisProtectedInternals | None] = []
-    for arg in args:
+    for index, arg in enumerate(args):
         if not isinstance(arg, _AxisProtectedBase):
             if not isinstance(arg, (torch.Tensor, np.number, np.bool_, bool, int, float, complex)):
                 return None
@@ -807,7 +814,9 @@ def _operator_inputs(
             continue
         if not callable(getattr(type(arg), "__torch_function__", None)):
             return None
-        internals = torch_axis_protected_internals(arg, func, check_is_permitted=True)
+        internals = torch_axis_protected_internals(
+            arg, func, check_is_permitted=True, broadcast=not has_output or index < len(args) - 1
+        )
         if internals is None or _has_numpy_protected_value(internals):
             return None
         if template is None:
@@ -891,25 +900,19 @@ def _operator_matmul(args: tuple[Any, ...], counts: tuple[int, ...], options: di
     return torch.movedim(result, tuple(range(count)), tuple(range(-count, 0))) if count else result
 
 
-def _operator_out_values(out: object, results: dict[str, Any], template: TorchAxisProtectedInternals) -> dict[str, Any]:
-    """Resolve actual destination storage and forbid implicit output resizing."""
-    internals = torch_axis_protected_internals(out)
+def _operator_out_values(out: object, template: TorchAxisProtectedInternals) -> dict[str, Any]:
+    """Resolve original destination storage, leaving writes to the backend."""
+    internals = torch_axis_protected_internals(out, broadcast=False)
     if internals is not None:
         if _has_numpy_protected_value(internals) or internals.protected_axes != template.protected_axes:
             msg = "out must use the same torch-backed protected_axes layout as the inputs."
             raise ValueError(msg)
         values = internals.values
-    elif len(results) == 1 and isinstance(out, torch.Tensor):
-        values = dict.fromkeys(results, out)
+    elif len(template.protected_axes) == 1 and isinstance(out, torch.Tensor):
+        values = dict.fromkeys(template.protected_axes, out)
     else:
         msg = "non-protected out is only supported for single-field protected objects."
         raise TypeError(msg)
-    for name, result in results.items():
-        if value_shape(values[name]) != value_shape(result):
-            msg = (
-                f"out must match the result shape for field {name!r}; operator outputs cannot resize protected storage."
-            )
-            raise ValueError(msg)
     return values
 
 
@@ -924,7 +927,7 @@ def protected_operator_function(
     del types
     operands, options, out = _operator_arguments(func, args, kwargs)
     participants = (*operands, out) if isinstance(out, _AxisProtectedBase) else operands
-    extracted = _operator_inputs(func, participants)
+    extracted = _operator_inputs(func, participants, has_output=len(participants) > len(operands))
     if extracted is None:
         return NotImplemented
     owner, template, inputs = extracted
@@ -945,26 +948,38 @@ def protected_operator_function(
             return _operator_matmul(field_args, counts, field_options)
         return func(*field_args, **field_options)
 
-    # Validate every result and destination shape before an out operation can
-    # write or resize any field. Native out calls then enforce casting/autograd.
+    if out is not None and func not in _COMPARISONS:
+        out_values = _operator_out_values(out, template)
+        for name, value in out_values.items():
+            result = apply(name, {**options, "out": value})
+            if value_shape(result) != value_shape(value):
+                msg = "Operation resized a destination view without updating the original field shape."
+                raise ValueError(msg)
+        return out
     results = {name: apply(name, options) for name in template.protected_axes}
     _validate_operator_result(results, template)
     if func in _COMPARISONS:
         result = _batch_comparison(results, template, func)
         if out is None:
             return result
-        if not isinstance(out, torch.Tensor) or value_shape(out) != value_shape(result):
-            msg = "comparison out must be a tensor with the resulting batch shape."
+        if not isinstance(out, torch.Tensor):
+            msg = "comparison out must be a tensor."
             raise ValueError(msg)
         return torch.eq(result, True, out=out)
-    if out is not None:
-        out_values = _operator_out_values(out, results, template)
-        # Stage native out calls before committing: later fields may read storage
-        # aliased by an earlier destination, or reject its dtype/autograd state.
-        buffers = {name: apply(name, {**options, "out": torch.clone(value)}) for name, value in out_values.items()}
-        for name, value in out_values.items():
-            value[...] = buffers[name]
-        return out
     processed = owner._postprocess_elementwise_result(results, func=func, operands=operands)  # noqa: SLF001
     _validate_operator_result(processed, template)
     return template.create(processed)
+
+
+@torch_function.register(torch.broadcast_to)
+@torch_internals_override(torch_param_pos=0)
+def protected_broadcast_to_function(
+    func: Callable,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    internals: TorchAxisProtectedInternals,
+) -> Any:  # noqa: ANN401
+    """Broadcast visible batch axes without changing protected suffixes."""
+    del func
+    shape = tuple(args[1] if len(args) > 1 else kwargs["size"])
+    return _apply_shape_only(internals, lambda _name, value, axes: _broadcast_batch(value, axes, shape))

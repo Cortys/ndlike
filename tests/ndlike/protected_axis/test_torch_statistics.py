@@ -75,16 +75,18 @@ def test_scalar_batch_preserves_components(func, keepdim):
 
 
 @pytest.mark.parametrize("func", [torch.std, torch.var])
-def test_native_output_and_reject_resizing(func):
+def test_native_output_and_native_resizing(func):
     x = Single(torch.arange(24.0).reshape(2, 3, 4))
     expected = func(x.array, dim=(0, 1))
     out = torch.empty_like(expected)
     assert func(x, out=out) is out
     assert_close(out, expected)
     bad = Single(torch.zeros(3))
-    with pytest.raises(ValueError, match="result shape"):
-        func(x, out=bad)
-    assert_close(bad.array, torch.zeros(3))
+    storage = bad.array
+    with pytest.warns(UserWarning, match="resized"):
+        assert func(x, out=bad) is bad
+    assert bad.array is storage
+    assert_close(bad.array, expected)
 
 
 @pytest.mark.parametrize("func", [torch.std, torch.var])
@@ -166,15 +168,19 @@ def test_empty_dimension_sequence_reduces_all_visible_axes(func):
 
 @pytest.mark.parametrize("func", [torch.mean, torch.sum, torch_average])
 @pytest.mark.parametrize("scalar_batch", [False, True])
-def test_reduction_rejects_bad_output_shape_before_writing(func, scalar_batch):
+def test_reduction_uses_native_output_resizing(func, scalar_batch):
     x = Statistics(torch.arange(3.0), torch.arange(6.0).reshape(2, 3))
     if not scalar_batch:
         x = Statistics(x.first.repeat(4, 1), x.second.repeat(4, 1, 1))
     out = Statistics(torch.zeros(3), torch.zeros(2, 2))
-    with pytest.raises(ValueError, match="result shape"):
-        func(x, dim=None, out=out)
-    assert_close(out.first, torch.zeros(3))
-    assert_close(out.second, torch.zeros(2, 2))
+    expected = func(x, dim=None)
+    storage = (out.first, out.second)
+    with pytest.warns(UserWarning, match="resized"):
+        assert func(x, dim=None, out=out) is out
+    assert out.first is storage[0]
+    assert out.second is storage[1]
+    assert_close(out.first, expected.first)
+    assert_close(out.second, expected.second)
 
 
 def test_scalar_batch_weighted_average_preserves_components():

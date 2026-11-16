@@ -118,8 +118,8 @@ def test_multifield_inplace_and_cross_field_aliasing():
     x += 2
     assert x is original
     assert x.first is storage
-    assert_close(x.first, torch.full((2, 2), 3.0))
-    assert_close(x.second, torch.full((2, 2, 1), 3.0))
+    assert_close(x.first, torch.full((2, 2), 5.0))
+    assert_close(x.second, torch.full((2, 2, 1), 5.0))
 
 
 @pytest.mark.parametrize(("op", "func"), _COMPARISONS)
@@ -205,24 +205,25 @@ def test_invalid_layouts_and_output_shapes_do_not_mutate():
     x = Pair(torch.ones((1, 3)), torch.ones((1, 2, 3)))
     with pytest.raises(ValueError, match="inconsistent batch-shapes"):
         _ = x + torch.ones((2, 3))
-    with pytest.raises(ValueError, match="result shape"):
+    with pytest.raises(RuntimeError, match="broadcast shape"):
         call(torch.add, x, Pair(torch.ones((2, 3)), torch.ones((2, 2, 3))), out=x)
     assert_close(x.first, torch.ones((1, 3)))
     assert_close(x.second, torch.ones((1, 2, 3)))
     out = Pair(torch.zeros_like(x.first), torch.zeros((2, 2, 3)))
-    with pytest.raises(ValueError, match="result shape"):
-        call(torch.add, x, 1, out=out)
-    assert_close(out.first, torch.zeros_like(x.first))
+    with pytest.warns(UserWarning, match="resized"):
+        assert call(torch.add, x, 1, out=out) is out
+    assert_close(out.first, x.first + 1)
+    assert_close(out.second, x.second + 1)
     with pytest.raises(TypeError, match="single-field"):
         call(torch.add, x, 1, out=torch.zeros_like(x.first))
 
 
-def test_native_casting_and_autograd_errors_leave_output_unchanged():
+def test_native_casting_allows_partial_writes_and_preserves_autograd_checks():
     x = Pair(torch.full((2, 3), 3.0), torch.full((2, 2, 3), 3.0))
     out = Pair(torch.zeros_like(x.first), torch.zeros_like(x.second, dtype=torch.int64))
     with pytest.raises(RuntimeError, match="cast"):
         call(torch.true_divide, x, 2, out=out)
-    assert_close(out.first, torch.zeros_like(x.first))
+    assert_close(out.first, x.first / 2)
     assert_close(out.second, torch.zeros_like(x.second, dtype=torch.int64))
     leaf = torch.ones((2, 3), requires_grad=True)
     y = Numeric(leaf)
@@ -366,20 +367,21 @@ def test_matmul_gradients_and_output_shape_validation():
     assert_close(left.grad, torch.full_like(left, 2))
     assert_close(right.grad, torch.full_like(right, 2))
     x = Numeric(torch.ones((2, 3, 4)))
-    with pytest.raises(ValueError, match="result shape"):
+    storage = x.array
+    with pytest.warns(UserWarning, match="resized"), pytest.raises(ValueError, match="destination view"):
         operator.imatmul(x, torch.ones((3, 5)))
-    assert_close(x.array, torch.ones((2, 3, 4)))
+    assert x.array is storage
     with pytest.raises(ValueError, match="visible dimension"):
         _ = Numeric(torch.ones(4)) @ Numeric(torch.ones(4))
 
 
-def test_comparison_outputs_reject_wrong_shapes_without_resizing():
+def test_comparison_outputs_use_native_resizing():
     x = Numeric(torch.ones((2, 3)))
     out = torch.zeros(3, dtype=torch.bool)
-    with pytest.raises(ValueError, match="batch shape"):
-        call(torch.eq, x, x, out=out)
-    assert_close(out, torch.zeros(3, dtype=torch.bool))
-    with pytest.raises(ValueError, match="batch shape"):
+    with pytest.warns(UserWarning, match="resized"):
+        assert call(torch.eq, x, x, out=out) is out
+    assert_close(out, torch.ones(2, dtype=torch.bool))
+    with pytest.raises(ValueError, match="comparison out"):
         call(torch.eq, x, x, out=x)
     assert_close(x.array, torch.ones((2, 3)))
 

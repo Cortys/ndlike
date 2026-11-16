@@ -18,6 +18,14 @@ if TYPE_CHECKING:
     from ndlike.tuple.jax import JaxBroadcastTuple
     from ndlike.tuple.torch import TorchBroadcastTuple
 
+    def _check_empty() -> None:
+        assert_type(NumpyBroadcastTuple(()), NumpyBroadcastTuple[tuple[()]])
+        assert_type(JaxBroadcastTuple(()), JaxBroadcastTuple[tuple[()]])
+        assert_type(TorchBroadcastTuple(()), TorchBroadcastTuple[tuple[()]])
+        assert_type(NumpyBroadcastTuple(())[42].members, tuple[()])
+        assert_type(JaxBroadcastTuple(()).reshape(3, 4).members, tuple[()])
+        assert_type(TorchBroadcastTuple(()).T.members, tuple[()])
+
     def _check_numpy[T1: AnyNumpyLike | np.ndarray | np.generic, T2: AnyNumpyLike | np.ndarray | np.generic](
         first: T1, second: T2
     ) -> None:

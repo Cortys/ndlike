@@ -18,6 +18,59 @@ if TYPE_CHECKING:
     from ndlike.torch_like import AnyTorchLike
 
 
+# Only functions with a fixed, single-array result can operate without members.
+_EMPTY_ARRAY_FUNCTIONS = frozenset(
+    (
+        torch.reshape,
+        torch.transpose,
+        torch.permute,
+        torch.swapaxes,
+        torch.movedim,
+        torch.squeeze,
+        torch.unsqueeze,
+        torch.broadcast_to,
+        torch.stack,
+        torch.cat,
+        torch.concatenate,
+        torch.clone,
+        torch.conj,
+        torch.adjoint,
+        torch.ravel,
+        torch.flatten,
+        torch.sum,
+        torch.prod,
+        torch.mean,
+        torch.std,
+        torch.var,
+        torch.all,
+        torch.any,
+        torch.add,
+        torch.sub,
+        torch.mul,
+        torch.true_divide,
+        torch.floor_divide,
+        torch.remainder,
+        torch.pow,
+        torch.matmul,
+        torch.bitwise_and,
+        torch.bitwise_or,
+        torch.bitwise_xor,
+        torch.bitwise_not,
+        torch.bitwise_left_shift,
+        torch.bitwise_right_shift,
+        torch.eq,
+        torch.ne,
+        torch.lt,
+        torch.le,
+        torch.gt,
+        torch.ge,
+        torch.neg,
+        torch.positive,
+        torch.abs,
+    )
+)
+
+
 class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
     BroadcastTuple[Members],
     TorchLikeImplementation[
@@ -29,7 +82,7 @@ class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
         "TorchBroadcastTuple[tuple[Any, ...]]",
     ],
 ):
-    """A nonempty collection exposing the broadcast shape of its Torch-like members.
+    """A collection exposing the broadcast shape of its Torch-like members.
 
     Functions pass through to corresponding members, preserving native dispatch
     and gradients. Use ``members`` to access stored representations, and indexing
@@ -71,6 +124,8 @@ class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
 
     def __array_namespace__(self, /, *, api_version: str | None = None) -> ModuleType:
         """Return the representative member's namespace when available."""
+        if not self.members:
+            return torch
         namespace = getattr(self.members[0], "__array_namespace__", None)
         if namespace is None:
             msg = "Underlying tensor does not support __array_namespace__."
@@ -80,7 +135,7 @@ class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
     @property
     def mT(self) -> Self:  # noqa: N802
         """Swap the last two logical batch axes."""
-        if self.ndim < 2:
+        if self.members and self.ndim < 2:
             msg = "mT requires at least two dimensions."
             raise ValueError(msg)
         return cast("Self", self.transpose(-2, -1))
@@ -129,4 +184,10 @@ class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
         if func is torch.numel:
             value = args[0] if args else (kwargs or {})["input"]
             return math.prod(value.shape)
-        return tuple_function(cls, func, args, {} if kwargs is None else kwargs)
+        return tuple_function(
+            cls,
+            func,
+            args,
+            {} if kwargs is None else kwargs,
+            nout=1 if func in _EMPTY_ARRAY_FUNCTIONS else None,
+        )

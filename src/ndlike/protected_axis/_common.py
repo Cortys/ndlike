@@ -325,8 +325,9 @@ def apply_shape_only[V, R](internals: AxisProtectedInternals[V, R], op: Callable
     """Transform batches while retaining normalized singleton broadcast fields."""
 
     def field_op(name: str, value: V, axes: int) -> V:
+        # An empty representation can remain scalar even after explicit broadcasting.
         if (
-            len(internals.broadcasted_batch) < len(internals.protected_axes)
+            (len(internals.broadcasted_batch) < len(internals.protected_axes) or internals.batch_shape != ())
             and name in internals.broadcasted_batch
             and value_ndim(value) == axes
         ):

@@ -11,6 +11,7 @@ from ndlike.tuple._common import BroadcastTuple, tuple_function
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from types import ModuleType
 
     from numpy.typing import DTypeLike
 
@@ -27,6 +28,39 @@ _MUTATING_FUNCTIONS = {
 }
 
 
+# Empty inputs cannot reveal return structure by dispatching to a member.
+_EMPTY_ARRAY_FUNCTIONS = frozenset(
+    (
+        np.reshape,
+        np.transpose,
+        np.matrix_transpose,
+        np.swapaxes,
+        np.moveaxis,
+        np.squeeze,
+        np.expand_dims,
+        np.broadcast_to,
+        np.stack,
+        np.concatenate,
+        np.copy,
+        np.astype,
+        np.ravel,
+        np.repeat,
+        np.take,
+        np.take_along_axis,
+        np.sum,
+        np.prod,
+        np.mean,
+        np.std,
+        np.var,
+        np.all,
+        np.any,
+        np.cumsum,
+        np.cumprod,
+        np.dot,
+    )
+)
+
+
 class NumpyBroadcastTuple[Members: tuple[AnyNumpyLike | np.ndarray | np.generic, ...]](
     BroadcastTuple[Members],
     NumpyLikeImplementation[
@@ -38,7 +72,7 @@ class NumpyBroadcastTuple[Members: tuple[AnyNumpyLike | np.ndarray | np.generic,
         "NumpyBroadcastTuple[tuple[Any, ...]]",
     ],
 ):
-    """A nonempty collection exposing the broadcast shape of its NumPy-like members.
+    """A collection exposing the broadcast shape of its NumPy-like members.
 
     Functions and ufuncs pass through to corresponding members after broadcasting.
     Indexing addresses the logical batch; use ``members`` for positional access.
@@ -69,9 +103,18 @@ class NumpyBroadcastTuple[Members: tuple[AnyNumpyLike | np.ndarray | np.generic,
         return isinstance(value, np.ndarray) and value.ndim == 0 and np.issubdtype(value.dtype, np.integer)
 
     @property
+    def dtype(self) -> np.dtype:
+        """Representative dtype, or object dtype when there are no members."""
+        return self.members[0].dtype if self.members else np.dtype(object)
+
+    def __array_namespace__(self, /, *, api_version: str | None = None) -> ModuleType:
+        """Return the representative namespace, or NumPy when empty."""
+        return super().__array_namespace__(api_version=api_version) if self.members else np
+
+    @property
     def flags(self) -> ArrayFlagsLike:
-        """Array flags of the representative first member."""
-        return self.members[0].flags
+        """Representative flags, or flags of empty NumPy storage when empty."""
+        return self.members[0].flags if self.members else np.empty(0).flags
 
     def __array_ufunc__(self, ufunc: np.ufunc, method: str, *inputs: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         """Pass every ufunc method through to corresponding members."""
@@ -88,6 +131,7 @@ class NumpyBroadcastTuple[Members: tuple[AnyNumpyLike | np.ndarray | np.generic,
             kwargs,
             mutate=0 if method == "at" else None,
             indexed=method == "at",
+            nout=ufunc.nout if method == "__call__" else 1,
         )
 
     def __array_function__(
@@ -117,6 +161,7 @@ class NumpyBroadcastTuple[Members: tuple[AnyNumpyLike | np.ndarray | np.generic,
             kwargs,
             mutate=(0 if args else destination) if destination is not None else None,
             indexed=destination is not None and func is not np.copyto,
+            nout=1 if func in _EMPTY_ARRAY_FUNCTIONS else None,
         )
 
     def reshape(self, *shape: int | Sequence[int], order: Literal["C", "F", "A"] = "C") -> Self:

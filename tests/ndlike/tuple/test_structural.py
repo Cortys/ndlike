@@ -99,8 +99,6 @@ def test_shape_dispatch(backend):
 
 
 def test_validation_and_unsupported_operations(backend):
-    with pytest.raises(ValueError, match="at least one"):
-        backend.cls(())
     with pytest.raises(TypeError, match="must be a tuple"):
         backend.cls([backend.array(1)])
     with pytest.raises(TypeError, match="shape and ndim"):

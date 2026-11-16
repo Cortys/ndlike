@@ -31,11 +31,12 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, eq=False, slots=True, weakref_slot=True)
 class BroadcastTuple[Members: tuple[Any, ...]](metaclass=ABCMeta):
-    """Nonempty tuple of opaque array-like members sharing a broadcast shape.
+    """Tuple of opaque array-like members sharing a broadcast shape.
 
     Access representation members through ``members``. Indexing and iteration
     address the logical batch, not the member positions. The first member is
     representative for dtype, device, and namespace metadata.
+    Empty tuples have neutral shape ``()`` and no members to constrain indexing.
     The type parameter describes the entire member tuple: ``tuple[A, B]``
     for fixed positions or ``tuple[T, ...]`` for arbitrary length.
     """
@@ -47,9 +48,6 @@ class BroadcastTuple[Members: tuple[Any, ...]](metaclass=ABCMeta):
         if not isinstance(self.members, tuple):
             msg = "members must be a tuple of array-like objects."
             raise TypeError(msg)
-        if not self.members:
-            msg = "A broadcast tuple must contain at least one member."
-            raise ValueError(msg)
         for member in self.members:
             if not hasattr(member, "shape") or not hasattr(member, "ndim"):
                 msg = "Each member must expose shape and ndim."
@@ -118,12 +116,12 @@ class BroadcastTuple[Members: tuple[Any, ...]](metaclass=ABCMeta):
     @property
     def dtype(self) -> Any:  # noqa: ANN401
         """Data type of the first member; members are never promoted together."""
-        return self.members[0].dtype
+        return self.members[0].dtype if self.members else None
 
     @property
     def device(self) -> Any:  # noqa: ANN401
-        """Device of the first member."""
-        return self.members[0].device
+        """Device of the first member, or None when empty."""
+        return self.members[0].device if self.members else None
 
     def __array_namespace__(self, /, *, api_version: str | None = None) -> ModuleType:
         """Return the first member's array namespace."""
@@ -157,9 +155,11 @@ class BroadcastTuple[Members: tuple[Any, ...]](metaclass=ABCMeta):
 
     def __getitem__(self, index: ToIndices, /) -> Self:
         """Index the logical batch while retaining compact basic-index storage."""
+        if not self.members:
+            return self.with_members(self.members)
         indices = index if isinstance(index, tuple) else (index,)
         if any(isinstance(item, BroadcastTuple) for item in indices):
-            return tuple_function(type(self), operator.getitem, (self, index), {})
+            return tuple_function(type(self), operator.getitem, (self, index), {}, nout=1)
         shape = self.shape
         basic = is_basic_index(index, self._is_scalar_integer)
         results: list[Any] = []
@@ -222,7 +222,7 @@ def _tuple_operands(value: object) -> Iterator[BroadcastTuple]:
             yield from _tuple_operands(item)
 
 
-def tuple_function(  # noqa: C901, PLR0912
+def tuple_function(  # noqa: C901, PLR0912, PLR0915
     owner: type[BroadcastTuple],
     func: Callable,
     args: tuple[Any, ...],
@@ -230,11 +230,14 @@ def tuple_function(  # noqa: C901, PLR0912
     *,
     mutate: int | str | None = None,
     indexed: bool = False,
+    nout: int | None = None,
 ) -> Any:  # noqa: ANN401
     """Pass a backend operation through to corresponding opaque members.
 
     Argument sequences are traversed to support stack/concatenate. A broadcast
     tuple itself is always opaque; its member representations are never traversed.
+    Empty calls require known output arity via nout (or an explicit mutation).
+    They never evaluate func to infer an arbitrary result container.
     """
     out = kwargs.get("out")
     out_position = None
@@ -281,6 +284,9 @@ def tuple_function(  # noqa: C901, PLR0912
     if mutate is not None and not isinstance(target, BroadcastTuple):
         msg = "Mutation requires a broadcast tuple destination."
         raise TypeError(msg)
+    if not count and nout is None and mutate is None:
+        msg = "This operation has no known result structure for an empty broadcast tuple."
+        raise NotImplementedError(msg)
     target_shape = target.shape if indexed and isinstance(target, BroadcastTuple) else None
     results = []
     for index in range(count):
@@ -301,8 +307,17 @@ def tuple_function(  # noqa: C901, PLR0912
             return out
         if all(value is not None for value in out):
             return out[0] if len(out) == 1 else out
-    result = pack_results(template, tuple(results))
-    if out is None:
+    if count:
+        result = pack_results(template, tuple(results))
+    elif mutate is not None:
+        result = None
+    else:
+        result = (
+            template.with_members(template.members)
+            if nout == 1
+            else tuple(template.with_members(template.members) for _ in range(nout or 0))
+        )
+    if out is None or result is None:
         return result
     if len(out) == 1:
         return result if out[0] is None else out[0]

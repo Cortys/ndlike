@@ -15,12 +15,66 @@ from ndlike.tuple._common import BroadcastTuple, _rebuild_sequence, tuple_functi
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import ModuleType
 
     from jax.sharding import Sharding
     from jax.typing import DTypeLike
 
     from ndlike.array_like import ToIndices
     from ndlike.jax_like import AnyJaxLike
+
+
+# Known array results only; populated tuples still forward arbitrary functions.
+_EMPTY_OUTPUTS = {
+    func: 1
+    for name in (
+        "reshape",
+        "transpose",
+        "matrix_transpose",
+        "swapaxes",
+        "moveaxis",
+        "squeeze",
+        "expand_dims",
+        "broadcast_to",
+        "stack",
+        "concatenate",
+        "copy",
+        "astype",
+        "take_along_axis",
+        "sum",
+        "mean",
+        "std",
+        "var",
+        "add",
+        "subtract",
+        "multiply",
+        "true_divide",
+        "floor_divide",
+        "remainder",
+        "power",
+        "matmul",
+        "bitwise_and",
+        "bitwise_or",
+        "bitwise_xor",
+        "left_shift",
+        "right_shift",
+        "invert",
+        "equal",
+        "not_equal",
+        "less",
+        "less_equal",
+        "greater",
+        "greater_equal",
+        "negative",
+        "positive",
+        "absolute",
+        "conj",
+    )
+    for func in (getattr(jf, f"jax_{name}"), getattr(jnp, name))
+}
+_EMPTY_OUTPUTS.update(
+    {func: 2 for name in ("divmod", "frexp", "modf") for func in (getattr(jf, f"jax_{name}"), getattr(jnp, name))}
+)
 
 
 class JaxBroadcastTuple[Members: tuple[AnyJaxLike | jax.Array, ...]](
@@ -34,7 +88,7 @@ class JaxBroadcastTuple[Members: tuple[AnyJaxLike | jax.Array, ...]](
         "JaxBroadcastTuple[tuple[Any, ...]]",
     ],
 ):
-    """A nonempty collection exposing the broadcast shape of its JAX-like members.
+    """A collection exposing the broadcast shape of its JAX-like members.
 
     Members remain dynamic pytree children. Native vmap maps stored member axes,
     not implicit logical broadcasts. Operations use ndlike's JAX wrappers and
@@ -92,12 +146,16 @@ class JaxBroadcastTuple[Members: tuple[AnyJaxLike | jax.Array, ...]](
 
     @property
     def sharding(self) -> Any:  # noqa: ANN401
-        """Sharding of the representative first member."""
-        return self.members[0].sharding
+        """Representative sharding, or None when empty."""
+        return self.members[0].sharding if self.members else None
 
     def devices(self) -> set[jax.Device]:
-        """Devices of the representative first member."""
-        return self.members[0].devices()
+        """Representative devices, or an empty set when empty."""
+        return self.members[0].devices() if self.members else set()
+
+    def __array_namespace__(self, /, *, api_version: str | None = None) -> ModuleType:
+        """Return the representative namespace, or JAX NumPy when empty."""
+        return super().__array_namespace__(api_version=api_version) if self.members else jnp
 
     @property
     def at(self) -> JaxTupleIndexUpdateHelper[Self]:
@@ -133,7 +191,7 @@ class JaxBroadcastTuple[Members: tuple[AnyJaxLike | jax.Array, ...]](
                 return value.ndim
             axis = args[1] if len(args) > 1 else kwargs.get("axis")
             return value.size if axis is None else value.shape[axis]
-        return tuple_function(cls, func, args, kwargs)
+        return tuple_function(cls, func, args, kwargs, nout=_EMPTY_OUTPUTS.get(func, _EMPTY_OUTPUTS.get(metadata_func)))
 
 
 @dataclass(frozen=True)
@@ -163,13 +221,22 @@ class JaxTupleIndexUpdateRef[T: JaxBroadcastTuple[Any]]:
             lambda member, index: member.at[index].get(**kwargs),
             (self.owner, self.index),
             {},
+            nout=1,
         )
 
     def _update(self, method: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> T:
         def call(member: Any, index: Any, *values: Any) -> Any:  # noqa: ANN401
             return getattr(member.at[index], method)(*values, **kwargs)
 
-        return tuple_function(type(self.owner), call, (self.owner, self.index, *args), {})
+        return tuple_function(
+            type(self.owner),
+            call,
+            (self.owner, self.index, *args),
+            {},
+            nout=1
+            if method in ("set", "add", "subtract", "multiply", "divide", "power", "min", "max", "apply")
+            else None,
+        )
 
     def set(self, value: object, **kwargs: Any) -> T:  # noqa: ANN401
         """Pass indexed set through to each member."""

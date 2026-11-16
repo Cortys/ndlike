@@ -107,7 +107,7 @@ compatibility and consistency with NumPy's `__array__`.
 
 `ndlike.tuple` provides `NumpyBroadcastTuple`, `JaxBroadcastTuple`, and
 `TorchBroadcastTuple` in its `numpy`, `jax`, and `torch` submodules. These are
-nonempty, heterogeneous collections with one logical array shape:
+heterogeneous collections with one logical array shape:
 
 ```python
 import numpy as np

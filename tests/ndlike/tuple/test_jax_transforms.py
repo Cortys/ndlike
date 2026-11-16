@@ -183,3 +183,39 @@ def test_member_flattening_preserves_additional_owner_fields():
     assert type(result.members) is Members
     assert result.label == x.label
     np.testing.assert_array_equal(result.extra, 7)
+
+
+def test_empty_tuple_transforms():
+    class Empty(NamedTuple):
+        pass
+
+    empty = JaxBroadcastTuple(Empty())
+    assert jax.tree.leaves(empty) == []
+    leaves, layout = jax.tree.flatten(empty)
+    restored = jax.tree.unflatten(layout, leaves)
+    assert type(restored.members) is Empty
+    shaped = jax.jit(lambda value, index: jf.jax_broadcast_to(value, (2, 3))[index].reshape(6))(
+        empty, jnp.array([7, 8])
+    )
+    assert type(shaped.members) is Empty
+    assert shaped.shape == ()
+    gradient = jax.grad(lambda _value: jnp.array(1.0))(empty)
+    assert type(gradient.members) is Empty
+    mapped = jax.vmap(lambda value, data: (value[data], data + 1), in_axes=(None, 0))(empty, jnp.arange(3))
+    assert type(mapped[0].members) is Empty
+    assert mapped[0].shape == ()
+    np.testing.assert_array_equal(mapped[1], [1, 2, 3])
+    quotient, remainder = jax.jit(lambda value: divmod(value, 3))(empty)
+    assert quotient.members == remainder.members == ()
+
+    @dataclass(frozen=True)
+    class Composite(JaxAxisProtected["Composite"]):
+        data: jax.Array
+        optional: JaxBroadcastTuple[Empty]
+        protected_axes: ClassVar[dict[str, int]] = {"data": 0, "optional": 0}
+        broadcasted_batch: ClassVar[set[str]] = {"optional"}
+
+    result = jax.jit(lambda value, index: value[index].reshape(2))(Composite(jnp.arange(4), empty), jnp.array([3, 1]))
+    np.testing.assert_array_equal(result.data, [3, 1])
+    assert type(result.optional.members) is Empty
+    assert result.shape == (2,)

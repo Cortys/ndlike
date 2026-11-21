@@ -28,11 +28,11 @@ wheels = [
 
 [[package]]
 name = "flextype"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/de/37/993b3a61a1f6febd183957b27e1f6812b31d05f69031ac5f8aed3ae2c04d/flextype-0.3.0.tar.gz", hash = "sha256:2b83852bbe269bc61e51d7cae1f9f3b09b9b32b29659867f17670d9e52d901ec", size = 34479, upload-time = "2026-10-20T21:00:02.628Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/bb/c3f1949ec67a136050448d27b67a9f09a291db7c16009d01d30e6d7e2820/flextype-0.4.0.tar.gz", hash = "sha256:03ced27e3d90d84b6abfbafb64921ea367083dd4f53d22ffe281d7a064f0b8f0", size = 41246, upload-time = "2026-11-21T23:48:52.265Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/11/6477ce871bfead7b198d6d6650c5e3bc080009ee20c3a53462a5d3fd479e/flextype-0.3.0-py3-none-any.whl", hash = "sha256:01e2c6603bbb18ab62cd23ea54c214d521043836a62280e6949868ecbef8e3e8", size = 33268, upload-time = "2026-10-20T21:00:01.292Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/2f/b70ebc5a8280f3f308d2c27becc56021880b7a74db490eb44cc63c036dfd/flextype-0.4.0-py3-none-any.whl", hash = "sha256:2a47527edb238fa6bb325956e0e969748a8a3a8c0c45973bd3f992f6d594ac6c", size = 40575, upload-time = "2026-11-21T23:48:51.173Z" },
 ]
 
 [[package]]
@@ -256,7 +256,7 @@ wheels = [
 
 [[package]]
 name = "ndlike"
-version = "0.6.1"
+version = "0.6.2"
 source = { editable = "." }
 dependencies = [
     { name = "flextype" },
@@ -289,7 +289,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flextype", specifier = ">=0.3.0" },
+    { name = "flextype", specifier = ">=0.4.0" },
     { name = "jax", marker = "extra == 'jax'", specifier = ">=0.8.1" },
     { name = "numpy", specifier = ">=2.1.0" },
     { name = "torch", marker = "sys_platform == 'darwin' and extra == 'torch'", specifier = ">=2.6.0" },

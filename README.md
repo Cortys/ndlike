@@ -1,4 +1,10 @@
-# ndlike
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Cortys/ndlike/master/docs/source/_static/logo/ndlike-logo-horizontal-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/source/_static/logo/ndlike-logo-horizontal-light.svg">
+    <img src="https://raw.githubusercontent.com/Cortys/ndlike/master/docs/source/_static/logo/ndlike-logo-horizontal-light.svg" alt="ndlike" width="320" />
+  </picture>
+</div>
 
 NumPy arrays, JAX arrays, and PyTorch tensors provide similar primitives for
 indexing, reshaping, stacking, and numerical operations. `ndlike` provides tools

@@ -79,21 +79,22 @@ class Pair(JaxAxisProtected[JaxLike[Any], Any]):
 @pytest.mark.parametrize("kind", ["scalar", "jax", "numpy", "protected"])
 def test_binary_operators_and_reflections(op, wrapper, backend, kind):
     x = Numeric(jnp.array([[2, 3], [4, 5]]))
-    other = {
+    other: Any = {
         "scalar": 2,
         "jax": jnp.array([1, 2]),
         "numpy": np.array([1, 2]),
         "protected": Numeric(jnp.array([1, 2])),
     }[kind]
-    raw = other.array if isinstance(other, Numeric) else other
+    aligned = other.array if isinstance(other, Numeric) else (other[:, None] if kind in ("jax", "numpy") else other)
     for left, right, expected in (
-        (x, other, backend(x.array, raw)),
-        (other, x, backend(raw, x.array)),
+        (x, other, backend(x.array, aligned)),
+        (other, x, backend(aligned, x.array)),
     ):
         result = op(left, right)
         if isinstance(left, np.ndarray):
+            # NumPy infix coerces JaxAxisProtected via __array__ without preserving the wrapper.
             assert isinstance(result, np.ndarray)
-            np.testing.assert_allclose(result, expected)
+            np.testing.assert_allclose(result, backend(left, x.array))
         else:
             assert isinstance(result, Numeric)
             np.testing.assert_allclose(result.array, expected)
@@ -162,14 +163,32 @@ def test_batch_broadcasting_preserves_protected_dimensions():
 def test_incompatible_protected_shapes_are_not_broadcast():
     with pytest.raises(ValueError, match="identical protected trailing shapes"):
         _ = Numeric(jnp.ones((2, 1))) + Numeric(jnp.ones((2, 3)))
-    with pytest.raises(ValueError, match="modified protected trailing axes"):
+    # Raw operands align across logical batch axes instead of broadcasting onto protected axes.
+    with pytest.raises(ValueError, match="Incompatible shapes"):
         _ = Numeric(jnp.ones((2, 1))) + jnp.ones((2, 3))
+    expanded = Numeric(jnp.ones((2, 1))) + jnp.ones((3, 2))
+    assert isinstance(expanded, Numeric)
+    assert expanded.shape == (3, 2)
+    assert expanded.protected_shape == (1,)
 
 
-def test_unsynchronized_fields_are_rejected_after_broadcast():
+def test_mixed_field_ranks_align_raw_operands_across_logical_batch():
     x = Pair(jnp.ones((1, 3)), jnp.ones((1, 2, 3)))
+    weights = jnp.arange(6.0).reshape(2, 3)
+    result = x + weights
+    assert isinstance(result, Pair)
+    assert result.shape == (2, 3)
+    np.testing.assert_array_equal(result.first, x.first + weights[..., None])
+    np.testing.assert_array_equal(result.second, x.second + weights[..., None, None])
+
+    @dataclass(frozen=True)
+    class DesyncedPostprocess(Pair):
+        def _postprocess_elementwise_result(self, values, *, func, operands):
+            del func, operands
+            return {"first": values["first"][:1], "second": values["second"]}
+
     with pytest.raises(ValueError, match="inconsistent batch-shapes"):
-        _ = x + jnp.ones((2, 3))
+        _ = DesyncedPostprocess(x.first, x.second) + weights
 
 
 def test_both_operands_must_permit_operation():

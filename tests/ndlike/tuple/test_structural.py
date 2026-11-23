@@ -98,6 +98,37 @@ def test_shape_dispatch(backend):
     assert backend.func("concatenate")((x, x)).shape == (4, 3)
 
 
+def test_shape_method_conveniences(backend):
+    x = example(backend)
+    expected_t = tuple(np.broadcast_to(np.asarray(m), x.shape).T for m in x.members)
+    if backend.name == "torch":
+        unsqueezed = x.unsqueeze(dim=0)
+        assert type(unsqueezed) is type(x)
+        assert unsqueezed.shape == (1, 2, 3)
+        assert unsqueezed.squeeze().shape == x.shape
+        assert unsqueezed.squeeze(None).shape == x.shape
+        moved = x.movedim(source=0, destination=1)
+        assert moved.shape == (3, 2)
+        assert_members(moved, expected_t)
+        assert unsqueezed.movedim((0, 2), (2, 0)).shape == (3, 2, 1)
+        for broadcasted in (x.broadcast_to((4, 2, 3)), x.broadcast_to(size=(4, 2, 3)), x.broadcast_to(4, 2, 3)):
+            assert broadcasted.shape == (4, 2, 3)
+            assert_members(broadcasted, tuple(np.broadcast_to(np.asarray(m), (4, 2, 3)) for m in x.members))
+        with pytest.raises(TypeError):
+            x.broadcast_to(shape=(4, 2, 3))
+    else:
+        swapped = x.swapaxes(0, 1)
+        assert type(swapped) is type(x)
+        assert swapped.shape == (3, 2)
+        assert_members(swapped, expected_t)
+        if backend.name == "numpy":
+            with pytest.raises(TypeError):
+                x.swapaxes(axis1=0, axis2=1)
+        else:
+            swapped_kw = x.swapaxes(axis1=0, axis2=1)
+            assert_members(swapped_kw, expected_t)
+
+
 def test_validation_and_unsupported_operations(backend):
     with pytest.raises(TypeError, match="must be a tuple"):
         backend.cls([backend.array(1)])
@@ -258,7 +289,15 @@ def test_metadata_functions_report_logical_shape(backend):
     if backend.name == "torch":
         assert x.size() == (2, 3)
         assert x.size(-1) == 3
+        assert x.dim() == x.ndimension() == 2
+        assert x.numel() == x.nelement() == 6
         assert backend.xp.numel(x) == 6
+        scalar = backend.cls((backend.array(1.0), backend.array(2.0)))
+        assert scalar.dim() == scalar.ndimension() == 0
+        assert scalar.numel() == scalar.nelement() == 1
+        zero = backend.cls((backend.array(np.empty((2, 0))), backend.array(np.ones(1))))
+        assert zero.dim() == zero.ndimension() == 2
+        assert zero.numel() == zero.nelement() == 0
     else:
         shape = backend.dispatch("a")(backend.xp.shape) if backend.name == "jax" else backend.xp.shape
         ndim = backend.dispatch("a")(backend.xp.ndim) if backend.name == "jax" else backend.xp.ndim

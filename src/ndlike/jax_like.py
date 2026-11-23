@@ -26,7 +26,6 @@ from ndlike.jax_functions import (
     handle_jax_function,
     has_jax_function,
     jax_astype,
-    jax_conj,
     jax_copy,
     jax_matrix_transpose,
     jax_reshape,
@@ -613,11 +612,6 @@ class JaxLikeImplementation[
     def mT(self) -> ShapeResultT:  # noqa: N802
         """The version of the underlying array with its last two axes swapped."""
         return jax_matrix_transpose(self)
-
-    @property
-    def mH(self) -> ShapeResultT:  # noqa: N802
-        """The adjoint (conjugate) transposed version of the underlying array."""
-        return jax_conj(cast("Any", self.mT))
 
     def reshape(self, *args: int | Sequence[int], order: str = "C") -> ShapeResultT:
         """Return a reshaped version of the array.

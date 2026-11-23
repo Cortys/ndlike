@@ -241,3 +241,83 @@ def test_nested_multi_field_value_delegates_without_array_casts() -> None:
     assert sliced.inner.left.shape == (3, 4)
     assert sliced.inner.right.shape == (3, 4)
     assert sliced.aux.shape == (5,)
+
+
+def test_swapaxes_and_squeeze_methods_preserve_protected_axes() -> None:
+    x = SingleArray(np.arange(24.0).reshape(2, 3, 4))
+
+    swapped = x.swapaxes(0, -1)
+    assert isinstance(swapped, SingleArray)
+    assert swapped.shape == (3, 2)
+    assert swapped.protected_shape == (4,)
+    np.testing.assert_array_equal(swapped.array, np.swapaxes(x.array, 0, 1))
+
+    with pytest.raises(TypeError):
+        x.swapaxes(axis1=0, axis2=1)  # ty: ignore[positional-only-parameter-as-kwarg]
+
+    with pytest.raises(ValueError, match="out of bounds"):
+        x.swapaxes(0, 2)
+
+    singleton = SingleArray(np.arange(24.0).reshape(1, 2, 1, 3, 4))
+    squeezed_all = singleton.squeeze()
+    assert isinstance(squeezed_all, SingleArray)
+    assert squeezed_all.shape == (2, 3)
+    assert squeezed_all.protected_shape == (4,)
+    assert singleton.squeeze(0).shape == (2, 1, 3)
+    assert singleton.squeeze(axis=-2).shape == (1, 2, 3)
+    assert singleton.squeeze((0, 2)).shape == (2, 3)
+    assert singleton.squeeze(axis=None).shape == (2, 3)
+
+    protected_singleton = SingleArray(np.arange(2.0).reshape(1, 2, 1))
+    squeezed = protected_singleton.squeeze()
+    assert isinstance(squeezed, SingleArray)
+    assert squeezed.shape == (2,)
+    assert squeezed.protected_shape == (1,)
+
+    with pytest.raises(ValueError, match="not equal to one"):
+        x.squeeze(axis=0)
+
+    scalar = SingleArray(np.array([1.0]))
+    for axis in (0, -1):
+        result = scalar.squeeze(axis)
+        assert isinstance(result, SingleArray)
+        assert result.shape == ()
+        assert result.array.shape == (1,)
+
+
+def test_swapaxes_and_squeeze_methods_on_nested_and_broadcasted_layouts() -> None:
+    inner = InnerPair(
+        left=np.arange(24.0).reshape(1, 2, 3, 4),
+        right=np.arange(24.0).reshape(1, 2, 3, 4) + 100,
+    )
+    outer = OuterNested(inner=inner, aux=np.arange(10.0).reshape(1, 2, 5))
+
+    swapped = outer.swapaxes(0, 1)
+    assert isinstance(swapped, OuterNested)
+    assert isinstance(swapped.inner, InnerPair)
+    assert swapped.shape == (2, 1)
+    assert swapped.inner.left.shape == (2, 1, 3, 4)
+    assert swapped.aux.shape == (2, 1, 5)
+
+    squeezed = outer.squeeze(axis=0)
+    assert isinstance(squeezed, OuterNested)
+    assert squeezed.shape == (2,)
+    assert squeezed.inner.left.shape == (2, 3, 4)
+    assert squeezed.aux.shape == (2, 5)
+
+    @dataclass(frozen=True, slots=True)
+    class Shared(NumpyAxisProtected):
+        compact: np.ndarray
+        data: np.ndarray
+        protected_axes: ClassVar[dict[str, int]] = {"compact": 1, "data": 1}
+        broadcasted_batch: ClassVar[set[str]] = {"compact"}
+
+    shared = Shared(np.ones(4), np.arange(24.0).reshape(1, 2, 3, 4))
+    swapped_shared = shared.swapaxes(1, 2)
+    assert isinstance(swapped_shared, Shared)
+    assert swapped_shared.shape == (1, 3, 2)
+    assert swapped_shared.compact.shape == (4,)
+    squeezed_shared = shared.squeeze()
+    assert isinstance(squeezed_shared, Shared)
+    assert squeezed_shared.shape == (2, 3)
+    assert squeezed_shared.compact.shape == (4,)

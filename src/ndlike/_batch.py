@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterable
+import operator
+from typing import TYPE_CHECKING, Any, SupportsIndex, cast
 
 import numpy as np
 
@@ -59,3 +61,43 @@ def normalize_broadcast_index(
             projected.append((slice(None) if isinstance(item, slice) else 0) if shared else item)
         axis += 1
     return tuple(projected)
+
+
+def _as_shape_dim(dim: object) -> int:
+    if isinstance(dim, (bool, np.bool_)):
+        msg = "shape must be an integer or a sequence of non-negative integers."
+        raise TypeError(msg)
+    return operator.index(cast("SupportsIndex", dim))
+
+
+def normalize_like_shape(shape: object) -> tuple[int, ...]:
+    """Normalize a logical batch shape override into a tuple of non-negative ints."""
+    if isinstance(shape, (bool, np.bool_)):
+        msg = "shape must be an integer or a sequence of non-negative integers."
+        raise TypeError(msg)
+    if isinstance(shape, (int, np.integer)):
+        dims = (int(shape),)
+    elif isinstance(shape, (str, bytes)):
+        msg = "shape must be an integer or a sequence of non-negative integers."
+        raise TypeError(msg)
+    elif isinstance(shape, Iterable):
+        try:
+            raw_dims = tuple(shape)
+        except TypeError as exc:
+            if isinstance(shape, SupportsIndex):
+                dims = (_as_shape_dim(shape),)
+            else:
+                msg = "shape must be an integer or a sequence of non-negative integers."
+                raise TypeError(msg) from exc
+        else:
+            dims = tuple(_as_shape_dim(dim) for dim in raw_dims)
+    elif isinstance(shape, SupportsIndex):
+        dims = (_as_shape_dim(shape),)
+    else:
+        msg = "shape must be an integer or a sequence of non-negative integers."
+        raise TypeError(msg)
+
+    if any(dim < 0 for dim in dims):
+        msg = f"negative dimensions are not allowed: {dims}."
+        raise ValueError(msg)
+    return dims

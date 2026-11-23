@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 from flextype import switchdispatch
 import numpy as np
 
+from ndlike._batch import normalize_like_shape
 from ndlike.array_like import NumpyLike
 from ndlike.protected_axis._common import (
     AxisProtectedCreator,
@@ -17,11 +18,14 @@ from ndlike.protected_axis._common import (
     _AxisProtectedBase,
     apply_shape_only as _apply_shape_only,
     apply_unary as _apply_unary,
+    batch_shape,
+    expand_for_protected_axes,
     extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
     flattened_batch_shape,
     function_override as numpy_function_override,
     internals_override,
+    like_field_shape,
     map_batch_axes as _map_batch_axes,
     normalize_axes,
     normalize_axis,
@@ -30,6 +34,8 @@ from ndlike.protected_axis._common import (
     protected_shape,
     require_effective_fields,
     validate_batch_sync,
+    validate_where_pair_compatibility,
+    validate_where_result,
     value_ndim,
     value_shape,
 )
@@ -61,7 +67,7 @@ _SHAPE_ONLY = frozenset(
         np.broadcast_to,
     )
 )
-_VALUE_ONLY = frozenset((np.copy, np.astype))
+_VALUE_ONLY = frozenset((np.copy, np.astype, np.zeros_like, np.ones_like, np.full_like))
 
 
 def _broadcast_batch(value: NumpyProtectedValue, axes: int, shape: tuple[int, ...]) -> NumpyProtectedValue:
@@ -162,6 +168,54 @@ def protected_astype_function(
     dtype = params.arguments["dtype"]
     copy = params.arguments.get("copy", True)
     return _apply_unary(internals, lambda _name, value, _axes: func(value, dtype, copy=copy))
+
+
+@numpy_function.multi_register([np.zeros_like, np.ones_like, np.full_like])
+@numpy_internals_override("a", allow_empty=True)
+def protected_like_function(
+    func: Callable,
+    params: BoundArguments,
+    internals: NumpyAxisProtectedInternals,
+) -> Any:  # noqa: ANN401
+    dtype = params.arguments.get("dtype", None)
+    order = params.arguments.get("order", "K")
+    subok = params.arguments.get("subok", True)
+    shape = params.arguments.get("shape", None)
+    device = params.arguments.get("device", None)
+    batch_target_shape = None if shape is None else normalize_like_shape(shape)
+
+    if batch_target_shape is not None:
+        require_effective_fields(internals.protected_axes)
+
+    def build(name: str, value: NumpyProtectedValue, axes_count: int) -> NumpyProtectedValue:
+        if batch_target_shape is not None:
+            field_shape: tuple[int, ...] | None = like_field_shape(name, value, axes_count, batch_target_shape)
+        elif (
+            name in internals.broadcasted_batch and batch_shape(value_shape(value), axes_count) != internals.batch_shape
+        ):
+            field_shape = like_field_shape(name, value, axes_count, internals.batch_shape)
+        else:
+            field_shape = None
+        field_kwargs: dict[str, Any] = {
+            "dtype": dtype,
+            "order": order,
+            "subok": subok,
+            "shape": field_shape,
+            "device": device,
+        }
+        if func is np.full_like:
+            return func(value, params.arguments["fill_value"], **field_kwargs)
+        return func(value, **field_kwargs)
+
+    if not subok:
+        if len(internals.protected_axes) != 1:
+            func_name = getattr(func, "__name__", repr(func))
+            msg = f"Cannot apply {func_name} to a multi-field protected object with subok=False."
+            raise TypeError(msg)
+        name, axes_count = next(iter(internals.protected_axes.items()))
+        return build(name, internals.values[name], axes_count)
+
+    return _apply_unary(internals, build)
 
 
 def _reduction_mean_values(
@@ -359,6 +413,8 @@ def protected_squeeze_function(
         batch_ndim = value_ndim(value) - axes_count
         shape = value_shape(value)
 
+        if batch_ndim == 0 and isinstance(axis, int) and axis in (-1, 0):
+            return value
         if axis is None:
             squeeze_axes = tuple(i for i, size in enumerate(shape[:batch_ndim]) if size == 1)
         else:
@@ -548,6 +604,136 @@ def protected_stack_function(
     return template.create(results)
 
 
+_NDARRAY_ARRAY_FUNCTION = getattr(np.ndarray, "__array_function__", None)
+
+
+def _has_custom_array_function(value: object) -> bool:
+    """Return whether ``value`` (or a nested sequence element) overrides ``__array_function__``."""
+    if isinstance(value, (list, tuple)):
+        return any(_has_custom_array_function(item) for item in value)
+    override = getattr(type(value), "__array_function__", None)
+    return override is not None and override is not _NDARRAY_ARRAY_FUNCTION
+
+
+def _extract_where_condition(condition: object) -> tuple[object, tuple[int, ...]] | None:
+    """Validate a boolean logical-batch condition for protected ``np.where``."""
+    if isinstance(condition, _AxisProtectedBase):
+        msg = "where condition must be a boolean array or scalar, not a protected-axis object."
+        raise TypeError(msg)
+    if _has_custom_array_function(condition):
+        return None
+    if isinstance(condition, (bool, np.bool_)):
+        return condition, ()
+    if isinstance(condition, np.ndarray):
+        if not np.issubdtype(condition.dtype, np.bool_):
+            msg = f"where condition must have boolean dtype, got {condition.dtype}."
+            raise TypeError(msg)
+        return condition, condition.shape
+    if isinstance(condition, (list, tuple)):
+        array = np.asarray(condition)
+        if not np.issubdtype(array.dtype, np.bool_):
+            msg = f"where condition must have boolean dtype, got {array.dtype}."
+            raise TypeError(msg)
+        return array, array.shape
+    msg = "where condition must be a boolean array or scalar."
+    raise TypeError(msg)
+
+
+def _extract_protected_where_branch(
+    arg: _AxisProtectedBase[Any, Any],
+    func: Callable,
+    template: NumpyAxisProtectedInternals | None,
+) -> tuple[NumpyAxisProtectedInternals, None, tuple[int, ...]] | None:
+    """Extract and validate one protected operand for ``np.where``."""
+    if not callable(getattr(type(arg), "__array_function__", None)):
+        return None
+    internals = numpy_axis_protected_internals(arg, func, check_is_permitted=True)
+    if internals is None:
+        return None
+    require_effective_fields(internals.protected_axes)
+    validate_batch_sync(internals.values, internals.protected_axes)
+    if template is not None and not validate_where_pair_compatibility(template, internals):
+        return None
+    return internals, None, internals.batch_shape
+
+
+def _extract_where_branch(
+    arg: object,
+    func: Callable,
+    template: NumpyAxisProtectedInternals | None,
+) -> tuple[NumpyAxisProtectedInternals | None, object, tuple[int, ...]] | None:
+    """Extract a protected branch or validate a raw logical-batch array/scalar branch."""
+    if isinstance(arg, _AxisProtectedBase):
+        return _extract_protected_where_branch(arg, func, template)
+    if _has_custom_array_function(arg):
+        return None
+    if isinstance(arg, (bool, int, float, complex, np.generic)):
+        return None, arg, ()
+    if isinstance(arg, np.ndarray):
+        return None, arg, arg.shape
+    if isinstance(arg, (list, tuple)):
+        array = np.asarray(arg)
+        if array.dtype != object:
+            return None, array, array.shape
+    return None
+
+
+@numpy_function.register(np.where)
+def protected_where_function(
+    func: Callable,
+    types: tuple[type[Any], ...],  # noqa: ARG001
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:  # noqa: ANN401
+    """Select logical-batch entries across protected fields via three-argument ``np.where``.
+
+    Opt-in through ``permitted_functions`` (consistent with NumPy reductions) because
+    selecting across batch entries or introducing a raw branch can violate representation
+    invariants. Subclasses may postprocess inputs via ``_postprocess_protected_values``
+    and outputs via ``with_protected_values(..., func=np.where)``.
+    """
+    if kwargs or len(args) != 3:
+        if not kwargs and len(args) == 2:
+            msg = "either both or neither of x and y should be given"
+            raise ValueError(msg)
+        return NotImplemented
+
+    condition, x, y = args
+    x_branch = _extract_where_branch(x, func, None)
+    if x_branch is None:
+        return NotImplemented
+    x_internals, x_raw, x_shape = x_branch
+
+    y_branch = _extract_where_branch(y, func, x_internals)
+    if y_branch is None:
+        return NotImplemented
+    y_internals, y_raw, y_shape = y_branch
+
+    template = x_internals if x_internals is not None else y_internals
+    if template is None:
+        return NotImplemented
+
+    extracted_condition = _extract_where_condition(condition)
+    if extracted_condition is None:
+        return NotImplemented
+    cond_value, cond_shape = extracted_condition
+
+    expected_batch_shape = np.broadcast_shapes(cond_shape, x_shape, y_shape)
+
+    results: dict[str, NumpyProtectedValue] = {}
+    for name, axes_count in template.protected_axes.items():
+        field_cond = expand_for_protected_axes(cond_value, axes_count)
+        field_x = x_internals.values[name] if x_internals is not None else expand_for_protected_axes(x_raw, axes_count)
+        field_y = y_internals.values[name] if y_internals is not None else expand_for_protected_axes(y_raw, axes_count)
+        result = func(field_cond, field_x, field_y)
+        if axes_count == 0 and not hasattr(result, "ndim"):
+            result = np.asarray(result)
+        results[name] = result
+
+    validate_where_result(results, template, expected_batch_shape)
+    return template.create(results)
+
+
 def _matmul_field(args: tuple[Any, ...], counts: tuple[int, ...], options: dict[str, Any]) -> Any:  # noqa: ANN401
     """Use protected coordinates as independent batches of visible matrices."""
     arrays = tuple(arg if hasattr(arg, "ndim") else np.asanyarray(arg) for arg in args)
@@ -598,6 +784,17 @@ def validate_ufunc_protected_shapes(
             ):
                 msg = f"All protected operands must share identical protected trailing shapes for field {name!r}."
                 raise ValueError(msg)
+
+
+def _expand_raw_operand(value: object, protected_axes_count: int) -> object:
+    """Align a raw NumPy array or Python sequence across logical batch axes."""
+    if protected_axes_count <= 0:
+        return value
+    if isinstance(value, np.ndarray):
+        return expand_for_protected_axes(value, protected_axes_count)
+    if isinstance(value, (list, tuple)):
+        return expand_for_protected_axes(np.asarray(value), protected_axes_count)
+    return value
 
 
 def _operator_inputs(
@@ -674,9 +871,13 @@ def protected_comparison_ufunc(
     if isinstance(out, tuple):
         (out,) = out
     where = options.pop("where", True)
+    align_raw = any(fields is not None for fields in inputs)
     values = {
         name: ufunc(
-            *(arg if fields is None else fields[name] for arg, fields in zip(operands, inputs, strict=True)),
+            *(
+                (_expand_raw_operand(arg, axes[name]) if align_raw else arg) if fields is None else fields[name]
+                for arg, fields in zip(operands, inputs, strict=True)
+            ),
             **options,
         )
         for name in axes

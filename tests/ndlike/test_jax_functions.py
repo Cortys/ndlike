@@ -164,7 +164,6 @@ if TYPE_CHECKING:
         assert_type(custom.flatten(), Result)
         assert_type(custom.squeeze(), Result)
         assert_type(protected.mT, JaxLike[Any])
-        assert_type(protected.mH, JaxLike[Any])
         assert_type(protected.reshape(2, 3), JaxLike[Any])
         assert_type(protected.take_along_axis(jax.numpy.zeros((2, 3), dtype=int)), JaxLike[Any])
         assert_type(protected.astype(None), JaxAxisProtected)

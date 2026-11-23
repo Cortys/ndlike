@@ -359,11 +359,6 @@ def test_mixed_numpy_sidecar_structural_unary_ops() -> None:
     assert tuple(matrix_transposed.array.shape) == (3, 2, 4)
     np.testing.assert_array_equal(matrix_transposed.sidecar, np.swapaxes(x.sidecar, 0, 1))
 
-    adjointed = x.mH
-    assert isinstance(adjointed, MixedArrayNumpy)
-    assert tuple(adjointed.array.shape) == (3, 2, 4)
-    np.testing.assert_array_equal(adjointed.sidecar, np.swapaxes(x.sidecar, 0, 1))
-
 
 def test_mixed_numpy_sidecar_sequence_ops() -> None:
     x = _mixed_array_numpy()
@@ -471,3 +466,51 @@ def test_nested_multi_field_value_delegates_without_array_casts() -> None:
     assert tuple(sliced.inner.left.shape) == (3, 4)
     assert tuple(sliced.inner.right.shape) == (3, 4)
     assert tuple(sliced.aux.shape) == (5,)
+
+
+def test_swapaxes_method_preserves_protected_axes_and_accepts_keywords() -> None:
+    x = SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
+
+    swapped = x.swapaxes(0, -1)
+    assert isinstance(swapped, SingleArray)
+    assert swapped.shape == (3, 2)
+    assert swapped.protected_shape == (4,)
+    np.testing.assert_array_equal(swapped.array, jnp.swapaxes(x.array, 0, 1))
+
+    swapped_kw = x.swapaxes(axis1=0, axis2=1)
+    assert isinstance(swapped_kw, SingleArray)
+    assert swapped_kw.shape == (3, 2)
+    np.testing.assert_array_equal(swapped_kw.array, jnp.swapaxes(x.array, 0, 1))
+
+    with pytest.raises(ValueError, match="out of bounds"):
+        x.swapaxes(0, 2)
+
+    mixed = _mixed_array_numpy()
+    swapped_mixed = mixed.swapaxes(0, 1)
+    assert isinstance(swapped_mixed, MixedArrayNumpy)
+    assert tuple(swapped_mixed.array.shape) == (3, 2, 4)
+    np.testing.assert_array_equal(swapped_mixed.sidecar, np.swapaxes(mixed.sidecar, 0, 1))
+
+    inner = InnerPairArray(
+        left=jnp.arange(48.0).reshape(2, 2, 3, 4),
+        right=jnp.arange(48.0).reshape(2, 2, 3, 4) + 100,
+    )
+    outer = OuterNestedArray(inner=inner, aux=jnp.arange(20.0).reshape(2, 2, 5))
+    swapped_outer = outer.swapaxes(axis1=0, axis2=1)
+    assert isinstance(swapped_outer, OuterNestedArray)
+    assert swapped_outer.shape == (2, 2)
+    np.testing.assert_array_equal(swapped_outer.inner.left, jnp.swapaxes(inner.left, 0, 1))
+    np.testing.assert_array_equal(swapped_outer.aux, jnp.swapaxes(outer.aux, 0, 1))
+
+    @dataclass(frozen=True, slots=True)
+    class Shared(JaxAxisProtected):
+        compact: jax.Array
+        data: jax.Array
+        protected_axes: ClassVar[dict[str, int]] = {"compact": 1, "data": 1}
+        broadcasted_batch: ClassVar[set[str]] = {"compact"}
+
+    shared = Shared(jnp.ones(4), jnp.arange(24.0).reshape(2, 3, 4))
+    swapped_shared = shared.swapaxes(0, 1)
+    assert isinstance(swapped_shared, Shared)
+    assert swapped_shared.shape == (3, 2)
+    assert tuple(swapped_shared.compact.shape) == (4,)

@@ -171,6 +171,10 @@ class JaxBroadcastTuple[Members: tuple[AnyJaxLike | jax.Array, ...]](
     def _map_array_fields(self, op: Callable[[Any], Any]) -> Self:
         return self._map_members(op)
 
+    def swapaxes(self, axis1: int, axis2: int) -> Self:
+        """Swap two logical batch axes."""
+        return cast("Self", jf.jax_swapaxes(self, axis1, axis2))
+
     @classmethod
     def __jax_function__(
         cls,

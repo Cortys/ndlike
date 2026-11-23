@@ -561,6 +561,29 @@ def protected_shape(shape: tuple[int, ...], protected_axes: int) -> tuple[int, .
     return () if protected_axes == 0 else shape[-protected_axes:]
 
 
+def like_field_shape(name: str, value: object, axes_count: int, batch_target_shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Combine a logical batch shape override with a field's protected trailing shape."""
+    field_shape = value_shape(value)
+    if len(field_shape) < axes_count:
+        msg = f"Protected field {name!r} has ndim {len(field_shape)}, expected >= {axes_count}."
+        raise ValueError(msg)
+    return (*batch_target_shape, *protected_shape(field_shape, axes_count))
+
+
+def expand_for_protected_axes[T](value: T, protected_axes_count: int) -> T:
+    """Append trailing singleton axes so a non-scalar array aligns with logical batch axes.
+
+    Scalars and 0D arrays are returned unchanged so scalar and 0D promotion semantics
+    are preserved.
+    """
+    if protected_axes_count <= 0:
+        return value
+    ndim = getattr(value, "ndim", None)
+    if not isinstance(ndim, int) or ndim == 0:
+        return value
+    return cast("Any", value)[(..., *(None,) * protected_axes_count)]
+
+
 def normalize_axis(axis: int, ndim: int, *, allow_endpoint: bool = False) -> int:
     """Normalize a possibly-negative batch axis and validate bounds."""
     bound = ndim + (1 if allow_endpoint else 0)
@@ -579,3 +602,74 @@ def normalize_axes(axes: tuple[int, ...], ndim: int, *, allow_endpoint: bool = F
 def coerce_axis_tuple(axis: int | tuple[int, ...] | list[int]) -> tuple[int, ...]:
     """Convert axis input into a tuple form."""
     return (axis,) if isinstance(axis, int) else tuple(axis)
+
+
+def _validate_nested_where_parity(
+    left_values: Mapping[str, object],
+    right_values: Mapping[str, object],
+    protected_axes: Mapping[str, int],
+) -> bool:
+    """Recursively verify that paired protected branches match nested protected layouts."""
+    for name in protected_axes:
+        left_val = left_values[name]
+        right_val = right_values[name]
+        if isinstance(left_val, _AxisProtectedBase) != isinstance(right_val, _AxisProtectedBase):
+            return False
+        if not isinstance(left_val, _AxisProtectedBase) or not isinstance(right_val, _AxisProtectedBase):
+            continue
+        if type(left_val) is not type(right_val):
+            return False
+        left_axes = left_val._effective_protected_axes  # noqa: SLF001
+        right_axes = right_val._effective_protected_axes  # noqa: SLF001
+        if left_axes != right_axes:
+            msg = "All protected operands must share identical protected_axes definitions."
+            raise ValueError(msg)
+        if not _validate_nested_where_parity(left_val.protected_values(), right_val.protected_values(), left_axes):
+            return False
+    return True
+
+
+def validate_where_pair_compatibility[V, R](
+    template: AxisProtectedInternals[V, R],
+    other: AxisProtectedInternals[V, R],
+) -> bool:
+    """Validate same-type layout, trailing protected shapes, and recursive nested parity."""
+    if other.owner_type is not template.owner_type:
+        return False
+    if other.protected_axes != template.protected_axes:
+        msg = "All protected operands must share identical protected_axes definitions."
+        raise ValueError(msg)
+    for name, axes_count in template.protected_axes.items():
+        if protected_shape(value_shape(other.values[name]), axes_count) != protected_shape(
+            value_shape(template.values[name]), axes_count
+        ):
+            msg = f"All protected operands must share identical protected trailing shapes for field {name!r}."
+            raise ValueError(msg)
+    return _validate_nested_where_parity(template.values, other.values, template.protected_axes)
+
+
+def validate_where_result[V, R](
+    values: Mapping[str, V],
+    template: AxisProtectedInternals[V, R],
+    expected_batch_shape: tuple[int, ...],
+    *,
+    allow_broadcasted: bool = False,
+) -> None:
+    """Validate ``where`` results against expected logical batch and protected trailing shapes."""
+    if values.keys() != template.protected_axes.keys():
+        msg = "where results must contain every protected field."
+        raise ValueError(msg)
+    actual_batch_shape = validate_batch_sync(
+        values,
+        template.protected_axes,
+        template.broadcasted_batch if allow_broadcasted else frozenset(),
+    )
+    if actual_batch_shape != expected_batch_shape:
+        msg = f"where produced batch shape {actual_batch_shape}, expected {expected_batch_shape}."
+        raise ValueError(msg)
+    for name, axes_count in template.protected_axes.items():
+        if protected_shape(value_shape(values[name]), axes_count) != protected_shape(
+            value_shape(template.values[name]), axes_count
+        ):
+            msg = f"where modified protected trailing axes for field {name!r}."
+            raise ValueError(msg)

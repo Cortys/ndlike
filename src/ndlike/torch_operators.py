@@ -53,14 +53,6 @@ def _unary(func: Callable) -> Callable[[Any], Any]:
     return method
 
 
-def _divmod(left: object, right: object) -> tuple[Any, Any]:
-    """Dispatch quotient and remainder separately because torch has no divmod."""
-    return (
-        torch.floor_divide(left, right),  # ty: ignore[invalid-argument-type]
-        torch.remainder(left, right),  # ty: ignore[no-matching-overload]
-    )
-
-
 class TorchOperatorsMixin[OpValueT = Any, OpResultT = Any, CompResultT = torch.Tensor]:  # noqa: PLW1641
     """Provide array operators through ``__torch_function__`` implementations.
 
@@ -94,8 +86,6 @@ class TorchOperatorsMixin[OpValueT = Any, OpResultT = Any, CompResultT = torch.T
     __rfloordiv__ = cast("Callable[[Any, OpValueT], OpResultT]", _binary(torch.floor_divide, reflected=True))
     __mod__ = cast("Callable[[Any, OpValueT], OpResultT]", _binary(torch.remainder))
     __rmod__ = cast("Callable[[Any, OpValueT], OpResultT]", _binary(torch.remainder, reflected=True))
-    __divmod__ = cast("Callable[[Any, OpValueT], tuple[OpResultT, OpResultT]]", _binary(_divmod))
-    __rdivmod__ = cast("Callable[[Any, OpValueT], tuple[OpResultT, OpResultT]]", _binary(_divmod, reflected=True))
     __matmul__ = cast("Callable[[Any, OpValueT], OpResultT]", _binary(torch.matmul))
     __rmatmul__ = cast("Callable[[Any, OpValueT], OpResultT]", _binary(torch.matmul, reflected=True))
     __and__ = cast("Callable[[Any, OpValueT], OpResultT]", _binary(torch.bitwise_and))

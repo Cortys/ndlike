@@ -172,3 +172,7 @@ class NumpyBroadcastTuple[Members: tuple[AnyNumpyLike | np.ndarray | np.generic,
     def squeeze(self, axis: int | tuple[int, ...] | None = None) -> Self:
         """Remove singleton logical batch axes."""
         return np.squeeze(cast("Any", self), axis=axis)
+
+    def swapaxes(self, axis1: int, axis2: int, /) -> Self:
+        """Swap two logical batch axes."""
+        return cast("Self", np.swapaxes(cast("Any", self), axis1, axis2))

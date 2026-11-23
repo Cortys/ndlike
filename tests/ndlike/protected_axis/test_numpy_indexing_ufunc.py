@@ -496,7 +496,17 @@ def test_ufunc_output_supplies_native_broadcast_shape():
 
     x = Mixed(np.ones((1, 3)), np.ones((1, 2, 3)))
     out: Any = Mixed(np.zeros((2, 3)), np.zeros((2, 2, 3)))
-    assert np.add(x, np.ones((2, 3)), out=out) is out
+    # Raw arrays align across logical batch axes for every field rank.
+    assert np.add(x, np.array([1.0, 2.0]), out=out) is out
+    np.testing.assert_array_equal(out.first, np.array([[2.0, 2.0, 2.0], [3.0, 3.0, 3.0]]))
+    np.testing.assert_array_equal(out.second, np.broadcast_to(np.array([2.0, 3.0])[:, None, None], (2, 2, 3)))
+    # Output still supplies native broadcast dimensions for smaller logical inputs.
+    assert np.add(x, np.ones((1,)), out=out) is out
+    np.testing.assert_array_equal(out.first, np.full((2, 3), 2))
+    np.testing.assert_array_equal(out.second, np.full((2, 2, 3), 2))
+    # Raw operands with incompatible logical batch shape are rejected without mutating out.
+    with pytest.raises(ValueError, match="broadcast"):
+        np.add(x, np.ones((2, 3)), out=out)
     np.testing.assert_array_equal(out.first, np.full((2, 3), 2))
     np.testing.assert_array_equal(out.second, np.full((2, 2, 3), 2))
 

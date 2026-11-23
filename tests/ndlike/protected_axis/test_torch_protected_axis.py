@@ -436,3 +436,136 @@ def test_nested_multi_field_value_delegates_without_tensor_casts() -> None:
     assert tuple(sliced.inner.left.shape) == (3, 4)
     assert tuple(sliced.inner.right.shape) == (3, 4)
     assert tuple(sliced.aux.shape) == (5,)
+
+
+def test_shape_convenience_methods_preserve_protected_axes() -> None:
+    x = SingleTensor(torch.arange(24.0).reshape(2, 3, 4))
+
+    assert x.dim() == x.ndimension() == 2
+    assert x.numel() == x.nelement() == 6
+
+    unsqueezed = x.unsqueeze(dim=-1)
+    assert isinstance(unsqueezed, SingleTensor)
+    assert unsqueezed.shape == (2, 3, 1)
+    assert unsqueezed.protected_shape == (4,)
+    torch.testing.assert_close(unsqueezed.tensor, x.tensor.unsqueeze(2))
+
+    moved = x.movedim(source=0, destination=1)
+    assert isinstance(moved, SingleTensor)
+    assert moved.shape == (3, 2)
+    assert moved.protected_shape == (4,)
+    torch.testing.assert_close(moved.tensor, x.tensor.movedim(0, 1))
+
+    moved_seq = unsqueezed.movedim((0, 2), (2, 0))
+    assert isinstance(moved_seq, SingleTensor)
+    assert moved_seq.shape == (1, 3, 2)
+    torch.testing.assert_close(moved_seq.tensor, unsqueezed.tensor.movedim((0, 2), (2, 0)))
+
+    broadcast_tuple = x.broadcast_to((5, 2, 3))
+    broadcast_kw = x.broadcast_to(size=(5, 2, 3))
+    broadcast_varargs = x.broadcast_to(5, 2, 3)
+    leading_dim: Any = torch.tensor(5)
+    for result in (broadcast_tuple, broadcast_kw, broadcast_varargs, x.broadcast_to(leading_dim, 2, 3)):
+        assert isinstance(result, SingleTensor)
+        assert result.shape == (5, 2, 3)
+        assert result.protected_shape == (4,)
+        torch.testing.assert_close(result.tensor, x.tensor.broadcast_to(5, 2, 3, 4))
+
+    with pytest.raises(TypeError):
+        x.broadcast_to(shape=(5, 2, 3))  # ty: ignore[no-matching-overload]
+    with pytest.raises(TypeError):
+        x.broadcast_to(size=5)  # ty: ignore[invalid-argument-type]
+
+    singleton = SingleTensor(torch.arange(24.0).reshape(1, 2, 1, 3, 4))
+    squeezed_all = singleton.squeeze()
+    assert isinstance(squeezed_all, SingleTensor)
+    assert squeezed_all.shape == (2, 3)
+    assert squeezed_all.protected_shape == (4,)
+    assert singleton.squeeze(None).shape == (2, 3)
+    assert singleton.squeeze(dim=None).shape == (2, 3)
+    assert singleton.squeeze(0).shape == (2, 1, 3)
+    assert singleton.squeeze(dim=-2).shape == (1, 2, 3)
+    assert singleton.squeeze((0, 2)).shape == (2, 3)
+    assert singleton.squeeze([0, 2]).shape == (2, 3)
+    # Squeezing a non-singleton batch axis is a no-op, matching native Torch.
+    assert x.squeeze(0).shape == (2, 3)
+
+    protected_singleton = SingleTensor(torch.arange(2.0).reshape(1, 2, 1))
+    squeezed = protected_singleton.squeeze()
+    assert isinstance(squeezed, SingleTensor)
+    assert squeezed.shape == (2,)
+    assert squeezed.protected_shape == (1,)
+
+    with pytest.raises(ValueError, match="out of bounds"):
+        x.squeeze(2)
+
+
+def test_squeeze_scalar_and_repeated_dimensions() -> None:
+    scalar = SingleTensor(torch.tensor([1.0]))
+    for dim in (0, -1, (0,)):
+        result = scalar.squeeze(dim)
+        assert isinstance(result, SingleTensor)
+        assert result.shape == ()
+        assert result.tensor.shape == (1,)
+
+    unsqueezed = scalar.unsqueeze(0)
+    assert isinstance(unsqueezed, SingleTensor)
+    with pytest.raises(RuntimeError, match="unique"):
+        unsqueezed.squeeze((0, 0))
+
+
+def test_shape_convenience_methods_on_sidecar_nested_and_broadcasted_layouts() -> None:
+    mixed = _mixed_tensor_numpy()
+    unsqueezed = mixed.unsqueeze(1)
+    assert isinstance(unsqueezed, MixedTensorNumpy)
+    assert tuple(unsqueezed.tensor.shape) == (2, 1, 3, 4)
+    np.testing.assert_array_equal(unsqueezed.sidecar, np.expand_dims(mixed.sidecar, axis=1))
+    assert unsqueezed.squeeze(dim=1).shape == (2, 3)
+    moved_mixed = mixed.movedim(0, 1)
+    assert isinstance(moved_mixed, MixedTensorNumpy)
+    assert moved_mixed.shape == (3, 2)
+    np.testing.assert_array_equal(moved_mixed.sidecar, np.moveaxis(mixed.sidecar, 0, 1))
+    broadcasted_mixed = mixed.broadcast_to(4, 2, 3)
+    assert isinstance(broadcasted_mixed, MixedTensorNumpy)
+    assert mixed.broadcast_to(size=(4, 2, 3)).shape == (4, 2, 3)
+    np.testing.assert_array_equal(broadcasted_mixed.sidecar, np.broadcast_to(mixed.sidecar, (4, 2, 3, 4)))
+    retained_sizes = mixed.broadcast_to(4, -1, -1)
+    assert isinstance(retained_sizes, MixedTensorNumpy)
+    np.testing.assert_array_equal(retained_sizes.sidecar, broadcasted_mixed.sidecar)
+
+    inner = InnerPairTensor(
+        left=torch.arange(24.0).reshape(1, 2, 3, 4),
+        right=torch.arange(24.0).reshape(1, 2, 3, 4) + 100,
+    )
+    outer = OuterNestedTensor(inner=inner, aux=torch.arange(10.0).reshape(1, 2, 5))
+    outer_unsqueezed = outer.unsqueeze(0)
+    outer_moved = outer.movedim(0, 1)
+    outer_broadcasted = outer.broadcast_to((3, 1, 2))
+    outer_squeezed = outer.squeeze(0)
+    assert isinstance(outer_unsqueezed, OuterNestedTensor)
+    assert isinstance(outer_moved, OuterNestedTensor)
+    assert isinstance(outer_broadcasted, OuterNestedTensor)
+    assert isinstance(outer_squeezed, OuterNestedTensor)
+    assert outer_unsqueezed.inner.left.shape == (1, 1, 2, 3, 4)
+    assert outer_moved.inner.left.shape == (2, 1, 3, 4)
+    assert outer_broadcasted.inner.left.shape == (3, 1, 2, 3, 4)
+    assert outer_squeezed.inner.left.shape == (2, 3, 4)
+
+    @dataclass(frozen=True, slots=True)
+    class Shared(TorchAxisProtected):
+        compact: torch.Tensor
+        data: torch.Tensor
+        protected_axes: ClassVar[dict[str, int]] = {"compact": 1, "data": 1}
+        broadcasted_batch: ClassVar[set[str]] = {"compact"}
+
+    shared = Shared(torch.ones(4), torch.arange(24.0).reshape(1, 2, 3, 4))
+    assert shared.dim() == 3
+    assert shared.numel() == 6
+    for result in (
+        shared.unsqueeze(0),
+        shared.movedim(1, 2),
+        shared.broadcast_to((5, 1, 2, 3)),
+        shared.squeeze(),
+    ):
+        assert isinstance(result, Shared)
+        assert result.compact.shape == (4,)

@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self, cast, overload
 
 import numpy as np
 import torch
 
-from ndlike.torch_like import TorchLikeImplementation, to_torch_like
+from ndlike.torch_like import TorchLikeImplementation, _broadcast_to_args, to_torch_like
 from ndlike.tuple._common import BroadcastTuple, tuple_function
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from types import ModuleType
 
     from ndlike.torch_like import AnyTorchLike
@@ -163,13 +163,37 @@ class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
         target = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
         return cast("Self", torch.reshape(cast("Any", self), cast("Any", target)))
 
-    def squeeze(self, dim: int | tuple[int, ...] | None = None) -> Self:
+    def squeeze(self, dim: int | tuple[int, ...] | list[int] | None = None) -> Self:
         """Remove singleton logical batch dimensions."""
         return (
             cast("Self", torch.squeeze(cast("Any", self), dim=dim))
             if dim is not None
             else cast("Self", torch.squeeze(cast("Any", self)))
         )
+
+    def unsqueeze(self, dim: int) -> Self:
+        """Insert a singleton logical batch dimension at ``dim``."""
+        return cast("Self", torch.unsqueeze(cast("Any", self), dim))
+
+    @overload
+    def movedim(self, source: int, destination: int) -> Self: ...
+
+    @overload
+    def movedim(self, source: Sequence[int], destination: Sequence[int]) -> Self: ...
+
+    def movedim(self, source: int | Sequence[int], destination: int | Sequence[int]) -> Self:
+        """Move logical batch dimensions from ``source`` to ``destination``."""
+        return torch.movedim(self, source, destination)  # ty: ignore[no-matching-overload]
+
+    @overload
+    def broadcast_to(self, size: Sequence[int]) -> Self: ...
+
+    @overload
+    def broadcast_to(self, dim: int, /, *dims: int) -> Self: ...
+
+    def broadcast_to(self, *args: int | Sequence[int], **kwargs: Sequence[int]) -> Self:
+        """Broadcast the common logical batch to ``size``."""
+        return torch.broadcast_to(self, *_broadcast_to_args(args), **kwargs)  # ty: ignore[invalid-explicit-return, invalid-argument-type]
 
     @classmethod
     def __torch_function__(

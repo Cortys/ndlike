@@ -378,7 +378,6 @@ class TestWrappers:
         results = (
             assert_type(original.T, Result),
             assert_type(original.mT, Result),
-            assert_type(original.mH, Result),
             assert_type(original.copy(), Result),
             assert_type(original.reshape(3, 2), Result),
             assert_type(original.transpose(), Result),
@@ -413,10 +412,6 @@ class TestImplementationDefaults:
 
     def test_matrix_transpose_property(self) -> None:
         assert self._wrapper().mT.shape == (3, 2)
-
-    def test_adjoint_property(self) -> None:
-        result = self._wrapper().mH
-        np.testing.assert_allclose(np.asarray(result), np.arange(6.0).reshape(2, 3).T)
 
     def test_reshape_with_separate_ints(self) -> None:
         assert self._wrapper().reshape(3, 2).shape == (3, 2)

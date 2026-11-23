@@ -13,7 +13,6 @@ import numpy as np
 
 from ndlike._batch import is_basic_index, normalize_broadcast_index as _normalize_broadcast_index
 from ndlike.jax_functions import (
-    jax_conj,
     jax_reshape,
     jax_swapaxes,
     jax_take_along_axis,
@@ -78,8 +77,11 @@ class JaxAxisProtected[
 
     Arithmetic is opt-in through ``permitted_functions``, using probly's ``jax_*``
     wrappers as keys. Elementwise operations apply to every protected field;
-    ordinary arrays follow field-level NumPy broadcasting. Protected operands
-    must have the same concrete type, layout, and protected trailing shapes.
+    raw array operands align right across logical batch axes and broadcast
+    uniformly across each field's protected trailing axes (recursing through
+    nested protected fields), while scalars and 0D arrays remain unchanged.
+    Protected operands must have the same concrete type, layout, and protected
+    trailing shapes.
     Comparisons return batch-shaped boolean arrays: all components and fields
     must satisfy the relation, except inequality, which tests whether any differ.
     Matrix multiplication acts on visible batch axes independently at each
@@ -241,14 +243,6 @@ class JaxAxisProtected[
             msg = "mT requires at least 2 batch dimensions."
             raise ValueError(msg)
         return jax_swapaxes(self, -2, -1)
-
-    @override
-    @property
-    def mH(self) -> ShapeResultT:
-        if self.ndim < 2:
-            msg = "mH requires at least 2 batch dimensions."
-            raise ValueError(msg)
-        return jax_conj(cast("Any", self.mT))
 
     def _index_with_protected_axes(self, index: ToIndices, protected_axes_count: int) -> tuple[Any, ...]:
         """Append full slices for the protected trailing axes."""
@@ -493,6 +487,10 @@ class JaxAxisProtected[
     def take_along_axis(self, indices: jax.Array, axis: int = -1) -> ShapeResultT:
         """Return a copy with gathered protected values along a batch dimension."""
         return jax_take_along_axis(self, indices, axis)
+
+    def swapaxes(self, axis1: int, axis2: int) -> ShapeResultT:
+        """Return a copy with two batch axes swapped."""
+        return jax_swapaxes(self, axis1, axis2)
 
 
 @dataclass(frozen=True, slots=True)

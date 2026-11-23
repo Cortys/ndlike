@@ -34,6 +34,7 @@ from ndlike.protected_axis._common import (
 from ndlike.protected_axis.numpy_functions import (
     _broadcast_batch,
     _broadcast_values,
+    _expand_raw_operand,
     numpy_function,
     protected_comparison_ufunc,
     protected_matmul_ufunc,
@@ -406,6 +407,9 @@ class NumpyAxisProtected[
                 raise TypeError(msg)
             return normalize_axis(axis, batch_ndim)
 
+        elementwise = (
+            method == "__call__" and ufunc.signature is None and any(values is not None for values in input_values)
+        )
         output_count = ufunc.nout if method == "__call__" else 1
         results: list[dict[str, NumpyProtectedValue]] = [{} for _ in range(output_count)]
         field_calls: dict[str, tuple[list[Any], dict[str, Any]]] = {}
@@ -429,7 +433,9 @@ class NumpyAxisProtected[
                     field_kwargs["out"] = mapped_out_items[0]
 
             field_inputs = tuple(
-                protected[name] if protected is not None else value
+                protected[name]
+                if protected is not None
+                else (_expand_raw_operand(value, axes_count) if elementwise else value)
                 for value, protected in zip(inputs, input_values, strict=True)
             )
             field_input_items = list(field_inputs)
@@ -518,3 +524,11 @@ class NumpyAxisProtected[
             shape = shape[0]
 
         return np.reshape(self, shape, order=order, copy=copy)  # ty:ignore[no-matching-overload]
+
+    def swapaxes(self, axis1: int, axis2: int, /) -> ShapeResultT:
+        """Return a copy with two batch axes swapped."""
+        return np.swapaxes(self, axis1, axis2)  # ty: ignore[invalid-explicit-return]
+
+    def squeeze(self, axis: int | tuple[int, ...] | None = None) -> ShapeResultT:
+        """Return a copy with singleton batch axes removed."""
+        return np.squeeze(self, axis=axis)  # ty: ignore[invalid-explicit-return]

@@ -41,6 +41,19 @@ def test_reductions_and_unlisted_functions(backend):
 
 def test_multiple_results(backend):
     x = example(backend)
+    if backend.name == "torch":
+        mantissa, exponent = backend.xp.frexp(x)
+        assert type(mantissa) is type(exponent) is type(x)
+        expected = tuple(np.frexp(np.broadcast_to(np.asarray(member), x.shape)) for member in x.members)
+        assert_members(mantissa, tuple(part[0] for part in expected))
+        assert_members(exponent, tuple(part[1] for part in expected))
+        assert_members(x // 3, tuple(np.broadcast_to(np.asarray(member), x.shape) // 3 for member in x.members))
+        assert_members(x % 3, tuple(np.broadcast_to(np.asarray(member), x.shape) % 3 for member in x.members))
+        with pytest.raises(TypeError):
+            divmod(x, 3)
+        with pytest.raises(TypeError):
+            divmod(3, x)
+        return
     quotient, remainder = divmod(x, 3)
     assert type(quotient) is type(remainder) is type(x)
     assert_members(quotient, tuple(np.broadcast_to(np.asarray(member), x.shape) // 3 for member in x.members))

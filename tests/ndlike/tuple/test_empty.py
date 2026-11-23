@@ -38,6 +38,8 @@ def test_metadata(backend):
         assert value.devices() == set()
     if backend.name == "torch":
         assert value.size() == ()
+        assert value.dim() == value.ndimension() == 0
+        assert value.numel() == value.nelement() == 1
         assert backend.xp.numel(value) == 1
     else:
         assert value.size == 1
@@ -86,9 +88,18 @@ def test_shaping_and_operators_are_neutral(backend):
         backend.func("sum")(value, axis=3),
     ]
     if backend.name == "torch":
-        results.extend((value.mH, backend.func("permute")(value, (2, 0, 1))))
+        results.extend(
+            (
+                value.mH,
+                value.unsqueeze(0),
+                value.movedim(0, 1),
+                value.broadcast_to((2, 3)),
+                value.broadcast_to(2, 3),
+                backend.func("permute")(value, (2, 0, 1)),
+            )
+        )
     else:
-        results.append(backend.func("transpose")(value, (2, 0, 1)))
+        results.extend((value.swapaxes(0, 1), backend.func("transpose")(value, (2, 0, 1))))
     for result in results:
         assert_empty(result, backend.cls)
     with pytest.raises(ValueError, match="same number"):

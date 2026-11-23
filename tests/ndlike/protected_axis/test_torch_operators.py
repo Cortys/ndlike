@@ -77,7 +77,7 @@ def test_binary_operations(op, inplace, func, kind, reflected):
     del inplace
     x = Numeric(torch.tensor([[2, 3], [4, 5]]))
     other = {"scalar": 2, "tensor": torch.tensor([1, 2]), "protected": Numeric(torch.tensor([1, 2]))}[kind]
-    raw = other.array if isinstance(other, Numeric) else other
+    raw = other.array if isinstance(other, Numeric) else (other[:, None] if isinstance(other, torch.Tensor) else other)
     left, right = (other, x) if reflected else (x, other)
     expected = func(raw, x.array) if reflected else func(x.array, raw)
     result = op(left, right)
@@ -184,27 +184,29 @@ def test_named_operands_alpha_and_output_only_dispatch():
     assert_close(x.array, torch.full((2, 3), 9.0))
 
 
+@pytest.mark.parametrize("kind", ["scalar", "tensor", "protected"])
 @pytest.mark.parametrize("reflected", [False, True])
-def test_divmod_dispatches_each_result(reflected):
+def test_divmod_is_unsupported(kind, reflected):
     x = Numeric(torch.tensor([[5, 7], [8, 9]]))
-    left, right = (20, x) if reflected else (x, 3)
-    raw_left, raw_right = (20, x.array) if reflected else (x.array, 3)
-    quotient, remainder = divmod(left, right)
-    assert isinstance(quotient, Numeric)
-    assert isinstance(remainder, Numeric)
-    assert_close(quotient.array, torch.floor_divide(raw_left, raw_right))
-    assert_close(remainder.array, call(torch.remainder, raw_left, raw_right))
+    other = {"scalar": 3, "tensor": torch.tensor([1, 2]), "protected": Numeric(torch.tensor([1, 2]))}[kind]
+    left, right = (other, x) if reflected else (x, other)
+    with pytest.raises(TypeError):
+        divmod(left, right)  # ty: ignore[no-matching-overload]
 
 
 def test_invalid_layouts_and_output_shapes_do_not_mutate():
     x = Numeric(torch.ones((2, 1)))
     with pytest.raises(ValueError, match="identical protected trailing shapes"):
         _ = x + Numeric(torch.ones((2, 3)))
-    with pytest.raises(ValueError, match="modified protected trailing axes"):
+    # Raw operands align across logical batch axes instead of broadcasting onto protected axes.
+    with pytest.raises(RuntimeError, match="must match"):
         _ = x + torch.ones((2, 3))
     x = Pair(torch.ones((1, 3)), torch.ones((1, 2, 3)))
-    with pytest.raises(ValueError, match="inconsistent batch-shapes"):
-        _ = x + torch.ones((2, 3))
+    aligned = x + torch.ones((2, 3))
+    assert isinstance(aligned, Pair)
+    assert aligned.shape == (2, 3)
+    assert_close(aligned.first, torch.full((2, 3, 3), 2.0))
+    assert_close(aligned.second, torch.full((2, 3, 2, 3), 2.0))
     with pytest.raises(RuntimeError, match="broadcast shape"):
         call(torch.add, x, Pair(torch.ones((2, 3)), torch.ones((2, 2, 3))), out=x)
     assert_close(x.first, torch.ones((1, 3)))

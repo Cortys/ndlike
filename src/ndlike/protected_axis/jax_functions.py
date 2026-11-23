@@ -10,6 +10,7 @@ from jax import numpy as jnp
 import numpy as np
 
 from ndlike import jax_functions as jf
+from ndlike._batch import normalize_like_shape
 from ndlike.jax_functions import (
     jax_astype,
     jax_average,
@@ -18,9 +19,11 @@ from ndlike.jax_functions import (
     jax_conj,
     jax_copy,
     jax_expand_dims,
+    jax_full_like,
     jax_matrix_transpose,
     jax_mean,
     jax_moveaxis,
+    jax_ones_like,
     jax_reshape,
     jax_squeeze,
     jax_stack,
@@ -30,6 +33,8 @@ from ndlike.jax_functions import (
     jax_take_along_axis,
     jax_transpose,
     jax_var,
+    jax_where,
+    jax_zeros_like,
 )
 from ndlike.jax_like import JaxLike
 from ndlike.protected_axis._common import (
@@ -42,19 +47,25 @@ from ndlike.protected_axis._common import (
     apply_shape_only as _apply_shape_only,
     apply_structural_op as _apply_structural_op,
     apply_unary as _apply_unary,
+    batch_shape,
+    expand_for_protected_axes,
     extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
     flattened_batch_shape,
     function_override as jax_function_override,
     has_numpy_protected_value as _has_numpy_protected_value,
     internals_override,
+    like_field_shape,
     map_batch_axes as _map_batch_axes,
     normalize_axes,
     normalize_axis,
     normalize_batch_reduction_axes as _normalize_batch_reduction_dims,
     prepare_broadcasted_batch,
     protected_shape,
+    require_effective_fields,
     validate_batch_sync,
+    validate_where_pair_compatibility,
+    validate_where_result,
     value_ndim,
     value_shape,
 )
@@ -72,7 +83,7 @@ type JaxAxisProtectedInternals = AxisProtectedInternals[JaxProtectedValue, Any]
 type _JaxBoundFunctionWithInternals = BoundFunctionWithInternals[JaxProtectedValue, Any]
 
 
-_VALUE_ONLY = frozenset((jax_copy, jax_astype, jax_conj))
+_VALUE_ONLY = frozenset((jax_copy, jax_astype, jax_conj, jax_zeros_like, jax_ones_like, jax_full_like))
 _SHAPE_ONLY = frozenset(
     (
         jax_reshape,
@@ -206,6 +217,48 @@ def protected_astype_function(
     copy = params.arguments.get("copy", True)
     device = params.arguments["device"]
     return _apply_unary(internals, lambda _name, value, _axes: func(value, dtype=dtype, copy=copy, device=device))
+
+
+@jax_function.multi_register([jax_zeros_like, jax_ones_like, jax_full_like])
+@_jax_internals_override("a", allow_empty=True)
+def protected_like_function(
+    func: Callable,
+    params: BoundArguments,
+    internals: JaxAxisProtectedInternals,
+) -> Any:  # noqa: ANN401
+    if _has_numpy_protected_value(internals):
+        return NotImplemented
+
+    dtype = params.arguments.get("dtype", None)
+    shape = params.arguments.get("shape", None)
+    device = params.arguments.get("device", None)
+    out_sharding = params.arguments.get("out_sharding", None)
+    batch_target_shape = None if shape is None else normalize_like_shape(shape)
+
+    if batch_target_shape is not None:
+        require_effective_fields(internals.protected_axes)
+
+    def build(name: str, value: JaxProtectedValue, axes_count: int) -> JaxProtectedValue:
+        if batch_target_shape is not None:
+            field_shape: tuple[int, ...] | None = like_field_shape(name, value, axes_count, batch_target_shape)
+        elif (
+            name in internals.broadcasted_batch and batch_shape(value_shape(value), axes_count) != internals.batch_shape
+        ):
+            field_shape = like_field_shape(name, value, axes_count, internals.batch_shape)
+        else:
+            field_shape = None
+        field_kwargs: dict[str, Any] = {
+            "dtype": dtype,
+            "shape": field_shape,
+            "device": device,
+        }
+        if out_sharding is not None:
+            field_kwargs["out_sharding"] = out_sharding
+        if func is jax_full_like:
+            return func(value, params.arguments["fill_value"], **field_kwargs)
+        return func(value, **field_kwargs)
+
+    return _apply_unary(internals, build)
 
 
 @jax_function.multi_register([jax_mean, jax_sum, jax_average, jax_std, jax_var])
@@ -663,6 +716,112 @@ def protected_take_along_axis_function(
     return internals.create(results)
 
 
+def _extract_where_condition(condition: object) -> tuple[object, tuple[int, ...]] | None:
+    """Validate a boolean logical-batch condition for protected ``jax_where``."""
+    if isinstance(condition, _AxisProtectedBase):
+        msg = "where condition must be a boolean array or scalar, not a protected-axis object."
+        raise TypeError(msg)
+    if jf.has_jax_function((condition,)):
+        return None
+    if isinstance(condition, (bool, np.bool_)):
+        return condition, ()
+    if isinstance(condition, (jax.Array, np.ndarray)):
+        if not np.issubdtype(condition.dtype, np.bool_):
+            msg = f"where condition must have boolean dtype, got {condition.dtype}."
+            raise TypeError(msg)
+        return condition, value_shape(condition)
+    msg = "where condition must be a boolean array or scalar."
+    raise TypeError(msg)
+
+
+def _extract_protected_where_branch(
+    arg: _AxisProtectedBase[Any, Any],
+    func: Callable,
+    template: JaxAxisProtectedInternals | None,
+) -> tuple[Any, JaxAxisProtectedInternals, None, tuple[int, ...]] | None:
+    """Extract and validate one protected operand for ``jax_where``."""
+    if not callable(getattr(type(arg), "__jax_function__", None)):
+        return None
+    internals = jax_axis_protected_internals(arg, func, check_is_permitted=True)
+    if internals is None or _has_numpy_protected_value(internals):
+        return None
+    require_effective_fields(internals.protected_axes)
+    validate_batch_sync(internals.values, internals.protected_axes)
+    if template is not None and not validate_where_pair_compatibility(template, internals):
+        return None
+    return arg, internals, None, internals.batch_shape
+
+
+def _extract_where_branch(
+    arg: object,
+    func: Callable,
+    template: JaxAxisProtectedInternals | None,
+) -> tuple[Any, JaxAxisProtectedInternals | None, object, tuple[int, ...]] | None:
+    """Extract a protected branch or validate a raw logical-batch array/scalar branch."""
+    if isinstance(arg, _AxisProtectedBase):
+        return _extract_protected_where_branch(arg, func, template)
+    if jf.has_jax_function((arg,)):
+        return None
+    if isinstance(arg, (bool, int, float, complex, np.number, np.bool_)):
+        return None, None, arg, ()
+    if isinstance(arg, (jax.Array, np.ndarray)):
+        return None, None, arg, value_shape(arg)
+    return None
+
+
+@jax_function.register(jax_where)
+@jax_function_override
+def protected_where_function(
+    func: Callable,
+    params: BoundArguments,
+) -> Any:  # noqa: ANN401
+    """Select logical-batch entries across protected fields via three-argument ``jax_where``.
+
+    Opt-in through ``permitted_functions`` and postprocessed via
+    ``_postprocess_elementwise_result``, consistent with elementwise operators.
+    """
+    condition = params.arguments["condition"]
+    x = params.arguments["x"]
+    y = params.arguments["y"]
+
+    x_branch = _extract_where_branch(x, func, None)
+    if x_branch is None:
+        return NotImplemented
+    x_owner, x_internals, x_raw, x_shape = x_branch
+
+    y_branch = _extract_where_branch(y, func, x_internals)
+    if y_branch is None:
+        return NotImplemented
+    y_owner, y_internals, y_raw, y_shape = y_branch
+
+    owner = x_owner if x_internals is not None else y_owner
+    template = x_internals if x_internals is not None else y_internals
+    if template is None:
+        return NotImplemented
+
+    extracted_condition = _extract_where_condition(condition)
+    if extracted_condition is None:
+        return NotImplemented
+    cond_value, cond_shape = extracted_condition
+
+    expected_batch_shape = np.broadcast_shapes(cond_shape, x_shape, y_shape)
+
+    results: dict[str, JaxProtectedValue] = {}
+    for name, axes_count in template.protected_axes.items():
+        field_cond = expand_for_protected_axes(cond_value, axes_count)
+        field_x = x_internals.values[name] if x_internals is not None else expand_for_protected_axes(x_raw, axes_count)
+        field_y = y_internals.values[name] if y_internals is not None else expand_for_protected_axes(y_raw, axes_count)
+        result = func(field_cond, field_x, field_y)
+        if axes_count == 0 and not hasattr(result, "ndim"):
+            result = jnp.asarray(result)
+        results[name] = result
+
+    validate_where_result(results, template, expected_batch_shape)
+    processed = owner._postprocess_elementwise_result(results, func=func, operands=(condition, x, y))  # noqa: SLF001
+    validate_where_result(processed, template, expected_batch_shape, allow_broadcasted=True)
+    return template.create(processed)
+
+
 @jax_function.register(jax_conj)
 @_jax_internals_override("x", allow_empty=True)
 def protected_conj_function(
@@ -733,8 +892,7 @@ def _validate_operator_result(values: dict[str, Any], template: JaxAxisProtected
     if values.keys() != template.values.keys():
         msg = "Operator results must contain every protected field."
         raise ValueError(msg)
-    # Raw operands can broadcast differently against fields with different
-    # protected ranks, even when the input representation is valid.
+    # Ensure both computed and postprocessed field results keep synchronized batches.
     validate_batch_sync(values, template.protected_axes, template.broadcasted_batch)
     for name, axes in template.protected_axes.items():
         if protected_shape(value_shape(values[name]), axes) != protected_shape(
@@ -801,7 +959,14 @@ def protected_operator_function(
     results: dict[str, Any] = {}
     for name, count in template.protected_axes.items():
         field_args = tuple(
-            arg if internals is None else internals.values[name] for arg, internals in zip(args, inputs, strict=True)
+            (
+                expand_for_protected_axes(arg, count)
+                if func is not jf.jax_matmul and isinstance(arg, (jax.Array, np.ndarray))
+                else arg
+            )
+            if internals is None
+            else internals.values[name]
+            for arg, internals in zip(args, inputs, strict=True)
         )
         operation = func
         if func is jf.jax_matmul:

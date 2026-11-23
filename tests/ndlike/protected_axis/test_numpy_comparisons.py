@@ -44,7 +44,12 @@ def test_comparisons_reduce_components_and_fields(op, func, kind, reflected):
     combine = np.logical_or if func is np.not_equal else np.logical_and
     expected = []
     for name, count in Pair.protected_axes.items():
-        field_args = tuple(getattr(arg, name) if isinstance(arg, Pair) else arg for arg in args)
+        field_args = tuple(
+            getattr(arg, name)
+            if isinstance(arg, Pair)
+            else (arg[(..., *(None,) * count)] if isinstance(arg, np.ndarray) and arg.ndim > 0 else arg)
+            for arg in args
+        )
         expected.append(reduce(func(*field_args), axis=tuple(range(-count, 0))))
     result = op(*args)
     assert isinstance(result, np.ndarray)
@@ -117,11 +122,11 @@ def test_invalid_outputs_and_operand_shapes_do_not_mutate():
     bad = Pair(np.ones((2, 1)), np.ones((2, 2, 3)))
     with pytest.raises(ValueError, match="identical protected trailing shapes"):
         np.equal(x, bad)
-    with pytest.raises(ValueError, match="modified protected trailing axes"):
+    # Raw operands align across logical batch axes rather than broadcasting onto protected axes.
+    with pytest.raises(ValueError, match="could not be broadcast"):
         np.equal(bad, np.ones(3))
-    inconsistent = Pair(np.ones((1, 3)), np.ones((1, 2, 3)))
-    with pytest.raises(ValueError, match="inconsistent batch-shapes"):
-        np.equal(inconsistent, np.ones((2, 3)))
+    aligned = Pair(np.ones((1, 3)), np.ones((1, 2, 3)))
+    np.testing.assert_array_equal(np.equal(aligned, np.ones((2, 3))), np.ones((2, 3), dtype=bool))
 
 
 def test_permissions_and_concrete_types():

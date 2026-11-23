@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, overload
 from flextype import switchdispatch
 import numpy as np
 import torch
+from torch.overrides import has_torch_function
 
 from ndlike.protected_axis._common import (
     AxisProtectedCreator,
@@ -19,6 +20,7 @@ from ndlike.protected_axis._common import (
     apply_structural_op as _apply_structural_op,
     apply_unary as _apply_unary,
     coerce_axis_tuple,
+    expand_for_protected_axes,
     extract_axis_protected_internals,
     extract_protected_value_sequence_internals,
     has_numpy_protected_value as _has_numpy_protected_value,
@@ -30,6 +32,8 @@ from ndlike.protected_axis._common import (
     protected_shape,
     require_effective_fields,
     validate_batch_sync,
+    validate_where_pair_compatibility,
+    validate_where_result,
     value_ndim,
     value_shape,
 )
@@ -251,6 +255,33 @@ def protected_clone_function(
 
     memory_format = kwargs.get("memory_format", torch.preserve_format)
     return _apply_unary(internals, lambda _name, value, _axes: func(value, memory_format=memory_format))
+
+
+@torch_function.multi_register([torch.zeros_like, torch.ones_like, torch.full_like])
+@torch_function_override
+def protected_like_function(
+    func: Callable,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:  # noqa: ANN401
+    """Create fields with native Torch options at the input's logical batch shape."""
+    options = dict(kwargs)
+    if args and "input" in options:
+        func_name = getattr(func, "__name__", repr(func))
+        msg = f"{func_name}() got multiple values for argument 'input'"
+        raise TypeError(msg)
+    template = args[0] if args else options.pop("input", None)
+    if not callable(getattr(type(template), "__torch_function__", None)):
+        return NotImplemented
+    if func is torch.full_like:
+        fill_value = args[1] if len(args) > 1 else options.get("fill_value")
+        if isinstance(fill_value, _AxisProtectedBase):
+            return NotImplemented
+    internals = torch_axis_protected_internals(template, func)
+    if internals is None or _has_numpy_protected_value(internals):
+        return NotImplemented
+
+    return _apply_unary(internals, lambda _name, value, _axes: func(value, *args[1:], **options))
 
 
 def _reduction_sample_axis(
@@ -531,9 +562,15 @@ def protected_squeeze_function(
             else:
                 msg = "squeeze dim must be an int or tuple/list of ints."
                 raise TypeError(msg)
-            squeeze_dims = normalize_axes(dim_tuple, batch_ndim)
+            squeeze_dims = normalize_axes(dim_tuple, max(batch_ndim, 1))
+            if len(set(squeeze_dims)) != len(squeeze_dims):
+                msg = "squeeze dimensions must be unique."
+                raise RuntimeError(msg)
+            if batch_ndim == 0:
+                # Torch accepts -1 and 0 on a scalar. Never squeeze a protected axis.
+                return value
 
-        squeeze_dims = tuple(sorted(set(squeeze_dims)))
+        squeeze_dims = tuple(sorted(squeeze_dims))
         if isinstance(value, np.ndarray):
             numpy_squeeze_dims = tuple(axis for axis in squeeze_dims if shape[axis] == 1)
             return np.squeeze(value, axis=numpy_squeeze_dims) if numpy_squeeze_dims else value
@@ -756,6 +793,138 @@ def protected_stack_function(
     return template.create(results)
 
 
+def _where_arguments(args: tuple[object, ...], kwargs: dict[str, Any]) -> tuple[object, object, object] | None:
+    """Bind three-argument ``torch.where`` operands."""
+    options = dict(kwargs)
+    if options.pop("out", None) is not None:
+        return None
+    # Torch's scalar-first overload names its second operand ``self``.
+    input_name = "self" if "self" in options else "input"
+    names = ("condition", input_name, "other")
+
+    if len(args) > len(names):
+        return None
+    operands = list(args)
+    for index, name in enumerate(names):
+        if index < len(args):
+            if name in options:
+                msg = f"Multiple values for operand {name!r}."
+                raise TypeError(msg)
+        elif name in options:
+            operands.append(options.pop(name))
+        else:
+            return None
+    if options:
+        return None
+    return operands[0], operands[1], operands[2]
+
+
+def _extract_where_condition(condition: object) -> tuple[torch.Tensor, tuple[int, ...]] | None:
+    """Validate a boolean logical-batch condition tensor for protected ``torch.where``."""
+    if isinstance(condition, _AxisProtectedBase):
+        msg = "where condition must be a boolean tensor, not a protected-axis object."
+        raise TypeError(msg)
+    if has_torch_function((condition,)):
+        return None
+    if isinstance(condition, torch.Tensor):
+        if condition.dtype is not torch.bool:
+            msg = f"where condition must have boolean dtype, got {condition.dtype}."
+            raise TypeError(msg)
+        return condition, value_shape(condition)
+    msg = "where condition must be a boolean tensor."
+    raise TypeError(msg)
+
+
+def _extract_protected_where_branch(
+    arg: _AxisProtectedBase[Any, Any],
+    func: Callable,
+    template: TorchAxisProtectedInternals | None,
+) -> tuple[Any, TorchAxisProtectedInternals, None, tuple[int, ...]] | None:
+    """Extract and validate one protected operand for ``torch.where``."""
+    if not callable(getattr(type(arg), "__torch_function__", None)):
+        return None
+    internals = torch_axis_protected_internals(arg, func, check_is_permitted=True)
+    if internals is None or _has_numpy_protected_value(internals):
+        return None
+    require_effective_fields(internals.protected_axes)
+    validate_batch_sync(internals.values, internals.protected_axes)
+    if template is not None and not validate_where_pair_compatibility(template, internals):
+        return None
+    return arg, internals, None, internals.batch_shape
+
+
+def _extract_where_branch(
+    arg: object,
+    func: Callable,
+    template: TorchAxisProtectedInternals | None,
+) -> tuple[Any, TorchAxisProtectedInternals | None, object, tuple[int, ...]] | None:
+    """Extract a protected branch or validate a raw logical-batch tensor/scalar branch."""
+    if isinstance(arg, _AxisProtectedBase):
+        return _extract_protected_where_branch(arg, func, template)
+    if has_torch_function((arg,)):
+        return None
+    if isinstance(arg, (bool, int, float, complex, np.number, np.bool_)):
+        return None, None, arg, ()
+    if isinstance(arg, torch.Tensor):
+        return None, None, arg, value_shape(arg)
+    return None
+
+
+@torch_function.register(torch.where)
+@torch_function_override
+def protected_where_function(
+    func: Callable,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:  # noqa: ANN401
+    """Select logical-batch entries across protected fields via three-argument ``torch.where``.
+
+    Opt-in through ``permitted_functions`` and postprocessed via
+    ``_postprocess_elementwise_result``, consistent with elementwise operators.
+    """
+    bound = _where_arguments(args, kwargs)
+    if bound is None:
+        return NotImplemented
+    condition, x, y = bound
+
+    x_branch = _extract_where_branch(x, func, None)
+    if x_branch is None:
+        return NotImplemented
+    x_owner, x_internals, x_raw, x_shape = x_branch
+
+    y_branch = _extract_where_branch(y, func, x_internals)
+    if y_branch is None:
+        return NotImplemented
+    y_owner, y_internals, y_raw, y_shape = y_branch
+
+    owner = x_owner if x_internals is not None else y_owner
+    template = x_internals if x_internals is not None else y_internals
+    if template is None:
+        return NotImplemented
+
+    extracted_condition = _extract_where_condition(condition)
+    if extracted_condition is None:
+        return NotImplemented
+    cond_value, cond_shape = extracted_condition
+
+    expected_batch_shape = np.broadcast_shapes(cond_shape, x_shape, y_shape)
+
+    results: dict[str, TorchProtectedValue] = {}
+    for name, axes_count in template.protected_axes.items():
+        field_cond = expand_for_protected_axes(cond_value, axes_count)
+        field_x = x_internals.values[name] if x_internals is not None else expand_for_protected_axes(x_raw, axes_count)
+        field_y = y_internals.values[name] if y_internals is not None else expand_for_protected_axes(y_raw, axes_count)
+        result = func(field_cond, field_x, field_y)
+        if axes_count == 0 and not hasattr(result, "ndim"):
+            result = torch.as_tensor(result)
+        results[name] = result
+
+    validate_where_result(results, template, expected_batch_shape)
+    processed = owner._postprocess_elementwise_result(results, func=func, operands=(condition, x, y))  # noqa: SLF001
+    validate_where_result(processed, template, expected_batch_shape, allow_broadcasted=True)
+    return template.create(processed)
+
+
 _COMPARISONS = (torch.eq, torch.ne, torch.lt, torch.le, torch.gt, torch.ge)
 _UNARY_OPERATORS = (torch.positive, torch.neg, torch.abs, torch.bitwise_not)
 _BINARY_OPERATORS = (
@@ -932,13 +1101,16 @@ def protected_operator_function(
         return NotImplemented
     owner, template, inputs = extracted
     inputs = inputs[: len(operands)]
+    align_raw = func is not torch.matmul and any(internals is not None for internals in inputs)
 
     field_arguments = {
         name: tuple(
-            arg if internals is None else internals.values[name]
+            (expand_for_protected_axes(arg, count) if align_raw and isinstance(arg, torch.Tensor) else arg)
+            if internals is None
+            else internals.values[name]
             for arg, internals in zip(operands, inputs, strict=True)
         )
-        for name in template.protected_axes
+        for name, count in template.protected_axes.items()
     }
 
     def apply(name: str, field_options: dict[str, Any]) -> Any:  # noqa: ANN401
@@ -982,4 +1154,9 @@ def protected_broadcast_to_function(
     """Broadcast visible batch axes without changing protected suffixes."""
     del func
     shape = tuple(args[1] if len(args) > 1 else kwargs["size"])
+    offset = len(shape) - internals.batch_ndim
+    if -1 in shape[: max(offset, 0)]:
+        msg = "Cannot keep the size of a new leading batch dimension."
+        raise RuntimeError(msg)
+    shape = tuple(internals.batch_shape[axis - offset] if size == -1 else size for axis, size in enumerate(shape))
     return _apply_shape_only(internals, lambda _name, value, axes: _broadcast_batch(value, axes, shape))

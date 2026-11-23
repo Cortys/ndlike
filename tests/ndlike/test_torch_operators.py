@@ -175,32 +175,26 @@ def test_implementation_inherits_working_unary_operators(op, func):
     assert_close(result.tensor, func(x.tensor))
 
 
+def test_torch_operators_do_not_expose_divmod():
+    for cls in (TorchOperatorsMixin, TorchLikeImplementation):
+        assert not hasattr(cls, "__divmod__")
+        assert not hasattr(cls, "__rdivmod__")
+
+
+@pytest.mark.parametrize("kind", ["scalar", "torch", "wrapper"])
 @pytest.mark.parametrize("reflected", [False, True])
-def test_divmod_dispatches_both_results(reflected):
-    x = _Recording()
-    left, right = (20, x) if reflected else (x, 3)
-    quotient, remainder = divmod(left, right)
+def test_divmod_raises_type_error_for_mixin_and_implementation(kind, reflected):
+    recording = _Recording()
+    other_recording = {"scalar": 3, "torch": torch.tensor([1, 2]), "wrapper": _Recording()}[kind]
+    left, right = (other_recording, recording) if reflected else (recording, other_recording)
+    with pytest.raises(TypeError):
+        divmod(left, right)  # ty: ignore[no-matching-overload]
 
-    assert isinstance(quotient, _Call)
-    assert isinstance(remainder, _Call)
-    assert quotient.func is torch.floor_divide
-    assert remainder.func is torch.remainder
-    for result in (quotient, remainder):
-        assert result.args[0] is left
-        assert result.args[1] is right
-
-
-@pytest.mark.parametrize("reflected", [False, True])
-def test_implementation_inherits_divmod(reflected):
-    x = _Tensor(torch.tensor([[5, 7], [8, 9]]))
-    left, right = (20, x) if reflected else (x, 3)
-    quotient, remainder = divmod(left, right)
-    assert isinstance(quotient, _Tensor)
-    assert isinstance(remainder, _Tensor)
-    expected_quotient = 20 // x.tensor if reflected else x.tensor // 3
-    expected_remainder = 20 % x.tensor if reflected else x.tensor % 3
-    assert_close(quotient.tensor, expected_quotient)
-    assert_close(remainder.tensor, expected_remainder)
+    tensor = _Tensor(torch.tensor([[5, 7], [8, 9]]))
+    other_tensor = {"scalar": 3, "torch": torch.tensor([1, 2]), "wrapper": _Tensor(torch.tensor([1, 2]))}[kind]
+    left, right = (other_tensor, tensor) if reflected else (tensor, other_tensor)
+    with pytest.raises(TypeError):
+        divmod(left, right)  # ty: ignore[no-matching-overload]
 
 
 @pytest.mark.parametrize("reflected", [False, True])
@@ -301,7 +295,7 @@ def test_override_errors_propagate_unchanged(op, func):
     assert caught.value is error
 
 
-@pytest.mark.parametrize("op", [operator.add, operator.iadd, operator.neg, operator.matmul, divmod])
+@pytest.mark.parametrize("op", [operator.add, operator.iadd, operator.neg, operator.matmul])
 def test_declined_overrides_raise_torch_dispatch_errors(op):
     class _Denied(TorchOperatorsMixin):
         @classmethod
@@ -321,7 +315,7 @@ def test_subclasses_can_explicitly_disable_numpy_ufuncs():
         np.add(_NoNumpy(), 1)
 
 
-@pytest.mark.parametrize(("op", "func"), [*_BINARY, (operator.matmul, torch.matmul), (divmod, None)])
+@pytest.mark.parametrize(("op", "func"), [*_BINARY, (operator.matmul, torch.matmul)])
 @pytest.mark.parametrize("reflected", [False, True])
 def test_numpy_operands_are_declined_before_torch_dispatch(op, func, reflected):
     del func
@@ -347,7 +341,8 @@ def test_supported_scalar_families_still_reach_torch_dispatch(scalar):
 
 
 @pytest.mark.parametrize(
-    "op", [operator.add, operator.sub, operator.mul, operator.truediv, operator.pow, divmod, operator.matmul]
+    "op",
+    [operator.add, operator.sub, operator.mul, operator.truediv, operator.pow, operator.matmul],
 )
 def test_foreign_operand_can_handle_the_reflected_operation(op):
     method = f"__r{op.__name__}__"

@@ -66,8 +66,8 @@ def test_binary_and_multiple_outputs_preserve_first_member_container(backend, so
     assert type(reverse.members) is OtherPair
     np.testing.assert_array_equal(result.members[0], [[11, 11, 11], [12, 12, 12]])
     np.testing.assert_array_equal(reverse.members.right, [[23, 24, 25], [23, 24, 25]])
-    quotient, remainder = divmod(source, 2)
-    assert type(quotient.members) is type(remainder.members) is type(source.members)
+    first, second = backend.xp.frexp(source) if backend.name == "torch" else divmod(source, 2)
+    assert type(first.members) is type(second.members) is type(source.members)
 
 
 def test_mutations_preserve_destination_container(backend, source):

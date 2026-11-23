@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from inspect import isabstract
-from typing import TYPE_CHECKING, Any, ClassVar, Never, assert_type, get_origin, get_protocol_members
+from typing import TYPE_CHECKING, Any, ClassVar, Never, Self, assert_type, get_origin, get_protocol_members, override
 
 import numpy as np
 import pytest
@@ -15,6 +15,10 @@ import torch
 from ndlike.array_like import WeakArrayLike
 from ndlike.protected_axis.torch import TorchAxisProtected
 from ndlike.torch_like import TorchLike, TorchLikeConvertible, TorchLikeImplementation, to_torch_like
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from types import ModuleType
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +51,15 @@ if TYPE_CHECKING:
         assert_type(implementation.resolve_neg(), Result)
         assert_type(implementation.reshape(2, 3), Result)
         assert_type(implementation.gather(0, torch.zeros((2, 3), dtype=torch.long)), Result)
+        assert_type(implementation.unsqueeze(0), Result)
+        assert_type(implementation.movedim(0, 1), Result)
+        assert_type(implementation.broadcast_to((2, 3)), Result)
+        assert_type(implementation.broadcast_to(2, 3), Result)
+        assert_type(implementation.squeeze(), Result)
+        assert_type(implementation.dim(), int)
+        assert_type(implementation.ndimension(), int)
+        assert_type(implementation.numel(), int)
+        assert_type(implementation.nelement(), int)
         assert_type(implementation.to(dtype=torch.float32), _Tensor)
         assert_type(implementation.detach(), _Tensor)
         assert_type(implementation.cpu(), _Tensor)
@@ -84,8 +97,100 @@ def test_dispatched_methods_can_return_another_wrapper_or_native_tensor(native: 
         original.resolve_neg(),
         original.reshape(2, 3),
         original.gather(0, torch.zeros((2, 3), dtype=torch.long)),
+        original.unsqueeze(0),
+        original.movedim(0, 1),
+        original.broadcast_to((2, 3)),
+        original.squeeze(),
     ):
         assert result is expected
+
+
+@pytest.mark.parametrize(
+    ("shape", "expected_dim", "expected_numel"),
+    [
+        ((), 0, 1),
+        ((3,), 1, 3),
+        ((2, 3), 2, 6),
+        ((2, 0, 3), 3, 0),
+    ],
+)
+def test_torch_like_implementation_metadata_conveniences(
+    shape: tuple[int, ...], expected_dim: int, expected_numel: int
+) -> None:
+    class _MinimalTorch(TorchLikeImplementation):
+        def __init__(self, logical_shape: tuple[int, ...]) -> None:
+            self._shape = logical_shape
+
+        @property
+        def shape(self) -> tuple[int, ...]:
+            return self._shape
+
+        @property
+        def dtype(self) -> torch.dtype:
+            return torch.float32
+
+        @property
+        def device(self) -> torch.device:
+            return torch.device("cpu")
+
+        @override
+        @property
+        def mT(self) -> Self:
+            return self
+
+        @override
+        @property
+        def mH(self) -> Self:
+            return self
+
+        def __getitem__(self, index, /) -> Self:
+            del index
+            return self
+
+        def __setitem__(self, index, value, /) -> None:
+            del index, value
+
+        def __array_namespace__(self, /, *, api_version: str | None = None) -> ModuleType:
+            del api_version
+            return torch
+
+        def __len__(self) -> int:
+            return self._shape[0]
+
+        def __iter__(self) -> Iterator[Self]:
+            return iter(())
+
+        def to(self, *args: object, **kwargs: object) -> Self:
+            del args, kwargs
+            return self
+
+        def __torch_function__(self, func, types, args=(), kwargs=None):  # noqa: ANN204
+            del func, types, args, kwargs
+            return NotImplemented
+
+        def numpy(self, *, force: bool = False) -> np.ndarray:
+            del force
+            return np.empty(self._shape, dtype=np.float32)
+
+        def detach(self) -> Self:
+            return self
+
+    minimal = _MinimalTorch(shape)
+    native = torch.empty(shape)
+    assert minimal.dim() == minimal.ndimension() == native.dim() == expected_dim
+    assert minimal.numel() == minimal.nelement() == native.numel() == expected_numel
+    assert isinstance(minimal.dim(), int)
+    assert isinstance(minimal.numel(), int)
+
+    protected = _Tensor(torch.empty((*shape, 4)))
+    assert protected.dim() == protected.ndimension() == expected_dim
+    assert protected.numel() == protected.nelement() == expected_numel
+
+
+def test_torch_protocol_is_not_widened_with_convenience_methods() -> None:
+    members = get_protocol_members(TorchLike)
+    for name in ("dim", "ndimension", "numel", "nelement", "unsqueeze", "movedim", "broadcast_to", "squeeze"):
+        assert name not in members
 
 
 @pytest.mark.parametrize("attribute", sorted(TorchLikeImplementation.__abstractmethods__))

@@ -21,10 +21,10 @@ from ndlike.protected_axis._common import (
     value_shape,
 )
 from ndlike.protected_axis.torch_functions import _broadcast_batch, torch_function
-from ndlike.torch_like import AnyTorchLike, TorchLike, TorchLikeImplementation
+from ndlike.torch_like import AnyTorchLike, TorchLike, TorchLikeImplementation, _broadcast_to_args
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping
+    from collections.abc import Callable, Iterator, Mapping, Sequence
     from types import ModuleType
 
     from ndlike.array_like import ToIndices
@@ -359,3 +359,33 @@ class TorchAxisProtected[
     def gather(self, dim: int, index: torch.Tensor) -> ShapeResultT:
         """Return a copy with gathered protected values along a batch dimension."""
         return cast("ShapeResultT", torch.gather(self, dim, index))  # ty: ignore[invalid-argument-type]
+
+    def unsqueeze(self, dim: int) -> ShapeResultT:
+        """Return the array with a singleton batch dimension inserted at ``dim``."""
+        return cast("ShapeResultT", torch.unsqueeze(self, dim))  # ty: ignore[invalid-argument-type]
+
+    @overload
+    def movedim(self, source: int, destination: int) -> ShapeResultT: ...
+
+    @overload
+    def movedim(self, source: Sequence[int], destination: Sequence[int]) -> ShapeResultT: ...
+
+    def movedim(self, source: int | Sequence[int], destination: int | Sequence[int]) -> ShapeResultT:
+        """Return the array with batch dimensions moved from ``source`` to ``destination``."""
+        return cast("ShapeResultT", torch.movedim(self, source, destination))  # ty: ignore[no-matching-overload]
+
+    @overload
+    def broadcast_to(self, size: Sequence[int]) -> ShapeResultT: ...
+
+    @overload
+    def broadcast_to(self, dim: int, /, *dims: int) -> ShapeResultT: ...
+
+    def broadcast_to(self, *args: int | Sequence[int], **kwargs: Sequence[int]) -> ShapeResultT:
+        """Return the array with batch dimensions broadcast to ``size``."""
+        return cast("ShapeResultT", torch.broadcast_to(self, *_broadcast_to_args(args), **kwargs))  # ty: ignore[invalid-argument-type]
+
+    def squeeze(self, dim: int | tuple[int, ...] | list[int] | None = None) -> ShapeResultT:
+        """Return the array with singleton batch dimensions removed."""
+        if dim is None:
+            return cast("ShapeResultT", torch.squeeze(self))  # ty: ignore[invalid-argument-type]
+        return cast("ShapeResultT", torch.squeeze(self, dim=dim))  # ty: ignore[no-matching-overload]

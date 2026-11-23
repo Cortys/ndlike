@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
 
     import jax
-    from jax.sharding import Sharding
+    from jax.sharding import NamedSharding, PartitionSpec, Sharding
     from jax.typing import ArrayLike as JTArrayLike, DTypeLike
 
     from ndlike.jax_like import AnyJaxLike, JaxLike
@@ -1474,6 +1474,157 @@ def jax_astype[ResultT = jax.Array](
 
 
 @overload
+def jax_zeros_like(
+    a: JTArrayLike,
+    dtype: DTypeLike | None = None,
+    shape: int | Sequence[int] | None = None,
+    *,
+    device: jax.Device | Sharding | None = None,
+    out_sharding: NamedSharding | PartitionSpec | None = None,
+) -> jax.Array: ...
+
+
+@overload
+def jax_zeros_like[OwnerT: AnyJaxLike = jax.Array](
+    a: JaxLike[OwnerT, Any, Any, Any, Any, Any, Any] | JTArrayLike,
+    dtype: DTypeLike | None = None,
+    shape: int | Sequence[int] | None = None,
+    *,
+    device: jax.Device | Sharding | None = None,
+    out_sharding: NamedSharding | PartitionSpec | None = None,
+) -> OwnerT: ...
+
+
+@jax_function_dispatch("a")
+def jax_zeros_like[OwnerT: AnyJaxLike = jax.Array](
+    a: JaxLike[OwnerT, Any, Any, Any, Any, Any, Any] | JTArrayLike,
+    dtype: DTypeLike | None = None,
+    shape: int | Sequence[int] | None = None,
+    *,
+    device: jax.Device | Sharding | None = None,
+    out_sharding: NamedSharding | PartitionSpec | None = None,
+) -> OwnerT:
+    """Return an array of zeros with the same shape and dtype, mirroring ``jax.numpy.zeros_like``.
+
+    Args:
+        a: Template array whose shape, dtype, and structure are matched.
+        dtype: Optional target data type. ``None`` preserves each field's dtype.
+        shape: Optional logical shape override.
+        device: Optional device or sharding for the created array.
+        out_sharding: Optional output sharding specification.
+
+    Returns:
+        An array of zeros matching ``a``, or the result supplied by a custom override.
+    """
+    kwargs: dict[str, Any] = {"dtype": dtype, "shape": shape, "device": device}
+    if out_sharding is not None:
+        kwargs["out_sharding"] = out_sharding
+    return cast("OwnerT", jnp.zeros_like(a, **kwargs))
+
+
+@overload
+def jax_ones_like(
+    a: JTArrayLike,
+    dtype: DTypeLike | None = None,
+    shape: int | Sequence[int] | None = None,
+    *,
+    device: jax.Device | Sharding | None = None,
+    out_sharding: NamedSharding | PartitionSpec | None = None,
+) -> jax.Array: ...
+
+
+@overload
+def jax_ones_like[OwnerT: AnyJaxLike = jax.Array](
+    a: JaxLike[OwnerT, Any, Any, Any, Any, Any, Any] | JTArrayLike,
+    dtype: DTypeLike | None = None,
+    shape: int | Sequence[int] | None = None,
+    *,
+    device: jax.Device | Sharding | None = None,
+    out_sharding: NamedSharding | PartitionSpec | None = None,
+) -> OwnerT: ...
+
+
+@jax_function_dispatch("a")
+def jax_ones_like[OwnerT: AnyJaxLike = jax.Array](
+    a: JaxLike[OwnerT, Any, Any, Any, Any, Any, Any] | JTArrayLike,
+    dtype: DTypeLike | None = None,
+    shape: int | Sequence[int] | None = None,
+    *,
+    device: jax.Device | Sharding | None = None,
+    out_sharding: NamedSharding | PartitionSpec | None = None,
+) -> OwnerT:
+    """Return an array of ones with the same shape and dtype, mirroring ``jax.numpy.ones_like``.
+
+    Args:
+        a: Template array whose shape, dtype, and structure are matched.
+        dtype: Optional target data type. ``None`` preserves each field's dtype.
+        shape: Optional logical shape override.
+        device: Optional device or sharding for the created array.
+        out_sharding: Optional output sharding specification.
+
+    Returns:
+        An array of ones matching ``a``, or the result supplied by a custom override.
+    """
+    kwargs: dict[str, Any] = {"dtype": dtype, "shape": shape, "device": device}
+    if out_sharding is not None:
+        kwargs["out_sharding"] = out_sharding
+    return cast("OwnerT", jnp.ones_like(a, **kwargs))
+
+
+@overload
+def jax_full_like(
+    a: JTArrayLike,
+    fill_value: JTArrayLike,
+    dtype: DTypeLike | None = None,
+    shape: int | Sequence[int] | None = None,
+    *,
+    device: jax.Device | Sharding | None = None,
+    out_sharding: NamedSharding | PartitionSpec | None = None,
+) -> jax.Array: ...
+
+
+@overload
+def jax_full_like[OwnerT: AnyJaxLike = jax.Array](
+    a: JaxLike[OwnerT, Any, Any, Any, Any, Any, Any] | JTArrayLike,
+    fill_value: JTArrayLike,
+    dtype: DTypeLike | None = None,
+    shape: int | Sequence[int] | None = None,
+    *,
+    device: jax.Device | Sharding | None = None,
+    out_sharding: NamedSharding | PartitionSpec | None = None,
+) -> OwnerT: ...
+
+
+@jax_function_dispatch("a")
+def jax_full_like[OwnerT: AnyJaxLike = jax.Array](
+    a: JaxLike[OwnerT, Any, Any, Any, Any, Any, Any] | JTArrayLike,
+    fill_value: JTArrayLike,
+    dtype: DTypeLike | None = None,
+    shape: int | Sequence[int] | None = None,
+    *,
+    device: jax.Device | Sharding | None = None,
+    out_sharding: NamedSharding | PartitionSpec | None = None,
+) -> OwnerT:
+    """Return a filled array with the same shape and dtype, mirroring ``jax.numpy.full_like``.
+
+    Args:
+        a: Template array whose shape, dtype, and structure are matched.
+        fill_value: Value used to fill the created array.
+        dtype: Optional target data type. ``None`` preserves each field's dtype.
+        shape: Optional logical shape override.
+        device: Optional device or sharding for the created array.
+        out_sharding: Optional output sharding specification.
+
+    Returns:
+        A filled array matching ``a``, or the result supplied by a custom override.
+    """
+    kwargs: dict[str, Any] = {"dtype": dtype, "shape": shape, "device": device}
+    if out_sharding is not None:
+        kwargs["out_sharding"] = out_sharding
+    return cast("OwnerT", jnp.full_like(a, fill_value, **kwargs))
+
+
+@overload
 def jax_mean(
     a: JTArrayLike,
     /,
@@ -1740,6 +1891,53 @@ def jax_average[ResultT = jax.Array](
     return jnp.average(a, axis, weights, returned, keepdims)  # ty: ignore[no-matching-overload]
 
 
+@overload
+def jax_where(condition: JTArrayLike, x: JTArrayLike, y: JTArrayLike) -> jax.Array: ...
+
+
+@overload
+def jax_where[ValueT, ResultT](
+    condition: JTArrayLike,
+    x: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any],
+    y: ValueT,
+) -> ResultT: ...
+
+
+@overload
+def jax_where[ValueT, ResultT](
+    condition: JTArrayLike,
+    x: ValueT,
+    y: JaxLike[Any, ValueT, ResultT, Any, Any, Any, Any],
+) -> ResultT: ...
+
+
+@overload
+def jax_where[ResultT = jax.Array](
+    condition: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    y: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+) -> ResultT: ...
+
+
+@jax_function_dispatch("condition", "x", "y")
+def jax_where[ResultT = jax.Array](
+    condition: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    x: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+    y: JaxLike[Any, Any, ResultT, Any, Any, Any, Any] | JTArrayLike,
+) -> ResultT:
+    """Select elements from ``x`` or ``y`` based on ``condition``, mirroring three-argument ``jax.numpy.where``.
+
+    Args:
+        condition: Boolean condition selecting entries from ``x`` where True and ``y`` where False.
+        x: Values chosen where ``condition`` is True.
+        y: Values chosen where ``condition`` is False.
+
+    Returns:
+        The selected values for native operands, or the result supplied by a custom override.
+    """
+    return cast("ResultT", jnp.where(condition, x, y))  # ty: ignore[invalid-argument-type]
+
+
 __all__ = [
     "JaxOperand",
     "SupportsJaxFunction",
@@ -1761,6 +1959,7 @@ __all__ = [
     "jax_expand_dims",
     "jax_floor_divide",
     "jax_frexp",
+    "jax_full_like",
     "jax_function_dispatch",
     "jax_greater",
     "jax_greater_equal",
@@ -1776,6 +1975,7 @@ __all__ = [
     "jax_multiply",
     "jax_negative",
     "jax_not_equal",
+    "jax_ones_like",
     "jax_positive",
     "jax_power",
     "jax_remainder",
@@ -1791,5 +1991,7 @@ __all__ = [
     "jax_transpose",
     "jax_true_divide",
     "jax_var",
+    "jax_where",
+    "jax_zeros_like",
     "try_jax_function",
 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import math
 from typing import TYPE_CHECKING, Any, Never, Protocol, Self, cast, overload, override, runtime_checkable
 
 from flextype import flexdispatch
@@ -14,7 +15,7 @@ from ndlike.array_like import WeakArrayLike
 from ndlike.torch_operators import TorchOperatorsMixin
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Sequence
     from types import ModuleType
 
     from numpy.typing import DTypeLike, NDArray
@@ -188,6 +189,22 @@ class TorchLikeImplementation[
         """Number of dimensions."""
         return len(self.shape)
 
+    def dim(self) -> int:
+        """Return the number of dimensions."""
+        return self.ndim
+
+    def ndimension(self) -> int:
+        """Return the number of dimensions."""
+        return self.dim()
+
+    def numel(self) -> int:
+        """Return the total number of elements."""
+        return math.prod(self.shape)
+
+    def nelement(self) -> int:
+        """Return the total number of elements."""
+        return self.numel()
+
     @property
     @abstractmethod
     def shape(self) -> tuple[int, ...]:
@@ -357,6 +374,13 @@ class TorchLikeImplementation[
 
 
 TorchLikeImplementation.register(torch.Tensor)
+
+
+def _broadcast_to_args(args: tuple[int | Sequence[int], ...]) -> tuple[object, ...]:
+    """Pack variadic tensor method dimensions for the functional API."""
+    if args and not isinstance(args[0], (tuple, list)):
+        return (args,)
+    return args
 
 
 @flexdispatch

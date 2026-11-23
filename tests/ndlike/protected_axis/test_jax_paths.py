@@ -251,7 +251,7 @@ def test_shape_out_of_bounds_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# mT and mH on insufficient ndim.
+# mT on insufficient ndim.
 # ---------------------------------------------------------------------------
 
 
@@ -260,13 +260,6 @@ def test_mT_requires_two_batch_dims() -> None:  # noqa: N802
     x = _SingleArray(jnp.arange(8.0).reshape(2, 4))  # batch ndim = 1
     with pytest.raises(ValueError, match="at least 2 batch dimensions"):
         _ = x.mT
-
-
-def test_mH_requires_two_batch_dims() -> None:  # noqa: N802
-    """``mH`` requires ndim >= 2."""
-    x = _SingleArray(jnp.arange(8.0).reshape(2, 4))  # batch ndim = 1
-    with pytest.raises(ValueError, match="at least 2 batch dimensions"):
-        _ = x.mH
 
 
 # ---------------------------------------------------------------------------

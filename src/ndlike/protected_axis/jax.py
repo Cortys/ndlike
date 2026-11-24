@@ -384,13 +384,20 @@ class JaxAxisProtected[
             msg = f"Indexed update {method!r} is not permitted for {type(self).__name__}."
             raise TypeError(msg)
 
-        value = self._prepare_assignment_value(value, method=method)
+        prepared = self._prepare_assignment_value(value, method=method)
         values = self.protected_values()
         primary_batch = self._protected_batch_shape(values)
-        candidate_values = self._coerce_assignment_value(value, validate_shape=method == "set")
-        updates: dict[str, JaxProtectedValue] = {}
-
+        candidate_values = self._coerce_assignment_value(prepared, validate_shape=method == "set")
+        updates = (
+            self._compact_assignment_values(
+                prepared, values, candidate_values, lambda axes: self._index_with_protected_axes(index, axes)
+            )
+            if method == "set"
+            else {}
+        )
         for name, axes in self._effective_protected_axes.items():
+            if name in updates:
+                continue
             value = values[name]
             if name in type(self).broadcasted_batch and batch_shape(value_shape(value), axes) != primary_batch:
                 value = _broadcast_batch(value, axes, primary_batch)
@@ -411,6 +418,13 @@ class JaxAxisProtected[
             updated = getattr(value.at[full_index], method)(candidate_values[name], **kwargs)
             updates[name] = updated
 
+        if method == "set" and self._assignment_is_compatible(
+            prepared,
+            values,
+            candidate_values,
+            lambda v: v.dtype if isinstance(v, (np.ndarray, np.generic, jax.Array)) else None,
+        ):
+            return cast("SetResultT", self._with_protected_values_structural(updates))
         return cast("SetResultT", self.with_protected_values(updates))
 
     @property

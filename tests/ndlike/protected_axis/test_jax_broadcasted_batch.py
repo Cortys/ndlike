@@ -603,8 +603,6 @@ class TestValueOperations:
         [
             lambda x: x + 2,
             lambda x: x * x,
-            lambda x: jf.jax_stack((x, x), axis=1),
-            lambda x: jf.jax_concatenate((x, x), axis=0),
             lambda x: jf.jax_take_along_axis(x, jnp.array([[2, 0], [1, 2]]), axis=1),
         ],
     )

@@ -450,8 +450,8 @@ def test_protected_broadcast_arithmetic_remains_opt_in(backend):
     assert reduced.shape == (3,)
     np.testing.assert_array_equal(reduced.compact, np.full((3, 4), 2.0))
     if backend.name != "jax":
-        with pytest.raises(ValueError, match="fully expanded"):
-            x[0] = x[0]
+        x[0] = x[0]
+        np.testing.assert_array_equal(x.compact, np.ones((2, 3, 4)))
         np.testing.assert_array_equal(x.data, np.ones((2, 3, 5)))
 
 

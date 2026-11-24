@@ -114,7 +114,7 @@ def _broadcast_batch(
 
 
 def jax_axis_protected_internals(
-    obj: object, func: Callable | None = None, *, check_is_permitted: bool = False
+    obj: object, func: Callable | None = None, *, check_is_permitted: bool = False, broadcast: bool = True
 ) -> JaxAxisProtectedInternals | None:
     """Prepare fields, keeping value-only storage and single-entry shape-only fields compact.
 
@@ -129,8 +129,8 @@ def jax_axis_protected_internals(
         func,
         check_is_permitted=check_is_permitted,
     )
-    if internals is None:
-        return None
+    if internals is None or not broadcast:
+        return internals
     return prepare_broadcasted_batch(
         internals,
         shape_only=func in _SHAPE_ONLY,
@@ -143,10 +143,16 @@ def jax_axis_protected_internals(
 
 
 def _extract_protected_value_sequence_internals(
-    values: tuple[object, ...], func: Callable | None = None
+    values: tuple[object, ...], func: Callable | None, *, compact: bool, structural: bool = True
 ) -> ProtectedValueSequenceInternals[JaxProtectedValue, Any]:
-    """Extract and align protected values for sequence operations."""
-    return extract_protected_value_sequence_internals(values, func, extract=jax_axis_protected_internals)
+    return extract_protected_value_sequence_internals(
+        values,
+        func,
+        extract=lambda value, ctx: jax_axis_protected_internals(value, ctx, broadcast=False),
+        broadcast=_broadcast_batch,
+        compact=compact,
+        structural=structural,
+    )
 
 
 def _expand_average_weights_for_protected_axes(
@@ -584,8 +590,10 @@ def protected_concatenate_function(
     axis = params.arguments["axis"]
     dtype = params.arguments["dtype"]
 
-    sequence = _extract_protected_value_sequence_internals(values, func)
-    template = sequence.template if sequence.template is not None else None
+    sequence = _extract_protected_value_sequence_internals(
+        values, func, compact=dtype is None, structural=dtype is None
+    )
+    template = sequence.template
     if template is None:
         return NotImplemented
 
@@ -593,25 +601,25 @@ def protected_concatenate_function(
         msg = "concatenate axis must be an int or None."
         raise TypeError(msg)
 
-    results: dict[str, JaxProtectedValue] = {}
-    for name, axes_count in template.protected_axes.items():
-        if not sequence.has_protected:
-            msg = "concatenate with protected out requires at least one protected input."
-            raise TypeError(msg)
+    if not sequence.has_protected:
+        msg = "concatenate with protected out requires at least one protected input."
+        raise TypeError(msg)
 
+    results: dict[str, JaxProtectedValue] = {}
+    for name, entries in sequence.values_by_field.items():
+        axes_count = template.protected_axes[name]
         value = template.values[name]
-        field_values = sequence.values_by_field[name]
         if axis is None:
-            field_values = [
+            field_values: list[object] = [
                 np.reshape(field, flattened_batch_shape(value_shape(field), axes_count))
                 if isinstance(field, np.ndarray)
                 else jax_reshape(cast("Any", field), flattened_batch_shape(value_shape(field), axes_count))
-                for field in field_values
+                for field in entries
             ]
             mapped_axis = 0
         else:
-            batch_ndim = value_ndim(value) - axes_count
-            mapped_axis = normalize_axis(axis, batch_ndim)
+            field_values = entries
+            mapped_axis = normalize_axis(axis, template.batch_ndim)
         if isinstance(value, np.ndarray):
             result = np.concatenate(
                 cast("Any", field_values),
@@ -629,7 +637,7 @@ def protected_concatenate_function(
 
         results[name] = result
 
-    return template.create(results)
+    return sequence.create(results)
 
 
 @jax_function.register(jax_stack)
@@ -642,8 +650,10 @@ def protected_stack_function(
     axis = params.arguments["axis"]
     dtype = params.arguments["dtype"]
 
-    sequence = _extract_protected_value_sequence_internals(values, func)
-    template = sequence.template if sequence.template is not None else None
+    sequence = _extract_protected_value_sequence_internals(
+        values, func, compact=dtype is None, structural=dtype is None
+    )
+    template = sequence.template
     if template is None:
         return NotImplemented
 
@@ -651,15 +661,13 @@ def protected_stack_function(
         msg = "stack axis must be an int."
         raise TypeError(msg)
 
-    results: dict[str, JaxProtectedValue] = {}
-    for name, axes_count in template.protected_axes.items():
-        if not sequence.has_protected:
-            msg = "stack with protected out requires at least one protected input."
-            raise TypeError(msg)
+    if not sequence.has_protected:
+        msg = "stack with protected out requires at least one protected input."
+        raise TypeError(msg)
 
-        field_values = sequence.values_by_field[name]
-        batch_ndim = value_ndim(template.values[name]) - axes_count
-        mapped_axis = normalize_axis(axis, batch_ndim, allow_endpoint=True)
+    results: dict[str, JaxProtectedValue] = {}
+    for name, field_values in sequence.values_by_field.items():
+        mapped_axis = normalize_axis(axis, template.batch_ndim, allow_endpoint=True)
 
         if isinstance(template.values[name], np.ndarray):
             result = np.stack(
@@ -671,7 +679,7 @@ def protected_stack_function(
             result = func(field_values, axis=mapped_axis, dtype=dtype)
         results[name] = result
 
-    return template.create(results)
+    return sequence.create(results)
 
 
 @jax_function.register(jax_take_along_axis)

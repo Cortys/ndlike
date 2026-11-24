@@ -36,6 +36,12 @@ type AnyTorchAxisProtected = TorchAxisProtected[Any, Any, Any, Any, Any, Any, An
 type TorchProtectedValue = TorchLike[Any] | torch.Tensor | np.ndarray
 
 
+def _assignment_dtype(value: object) -> np.dtype | str | None:
+    if isinstance(value, torch.Tensor):
+        return str(value.dtype).removeprefix("torch.")
+    return value.dtype if isinstance(value, (np.ndarray, np.generic)) else None
+
+
 def _validate_field_ndim(name: str, ndim: int, protected_axes: int) -> None:
     if ndim < protected_axes:
         msg = f"Protected field {name!r} has ndim {ndim}, expected >= {protected_axes}."
@@ -277,15 +283,14 @@ class TorchAxisProtected[
     def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:
         require_effective_fields(self._effective_protected_axes)
         prepared = self._prepare_assignment_value(value)
-        values = self.protected_values()
-        candidate_values = self._coerce_assignment_value(prepared)
-        logical_shape = self._protected_batch_shape(values)
-        for name, axes in self._effective_protected_axes.items():
-            if name in self.broadcasted_batch and batch_shape(value_shape(values[name]), axes) != logical_shape:
-                msg = "Indexed assignment requires fully expanded broadcasted fields."
-                raise ValueError(msg)
-            full_index = self._index_with_protected_axes(index, axes)
-            cast("Any", values[name])[full_index] = candidate_values[name]
+        self._set_protected_items(
+            prepared,
+            self._coerce_assignment_value(prepared),
+            field_index=lambda axes: self._index_with_protected_axes(index, axes),
+            broadcast=_broadcast_batch,
+            clone=lambda v: v.copy() if isinstance(v, np.ndarray) else v.clone(),
+            dtype_of=_assignment_dtype,
+        )
 
     @override
     def to(self, *args: Any, **kwargs: Any) -> Self:

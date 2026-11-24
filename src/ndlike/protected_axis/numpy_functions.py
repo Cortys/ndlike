@@ -111,10 +111,16 @@ def numpy_axis_protected_internals(
 
 
 def _extract_protected_value_sequence_internals(
-    values: tuple[object, ...], func: Callable | None
+    values: tuple[object, ...], func: Callable | None, *, compact: bool, structural: bool = True
 ) -> ProtectedValueSequenceInternals[NumpyProtectedValue, Any]:
-    """Extract and align protected values for sequence operations."""
-    return extract_protected_value_sequence_internals(values, func, extract=numpy_axis_protected_internals)
+    return extract_protected_value_sequence_internals(
+        values,
+        func,
+        extract=lambda value, ctx: numpy_axis_protected_internals(value, ctx, broadcast=False),
+        broadcast=_broadcast_batch,
+        compact=compact,
+        structural=structural,
+    )
 
 
 @switchdispatch
@@ -512,8 +518,11 @@ def protected_concatenate_function(
     axis = kwargs.get("axis", args[1] if len(args) > 1 else 0)
     out = kwargs.get("out", args[2] if len(args) > 2 else None)
 
+    dtype = kwargs.get("dtype")
     out_internals = numpy_axis_protected_internals(out, broadcast=False)
-    sequence = _extract_protected_value_sequence_internals(values, func)
+    sequence = _extract_protected_value_sequence_internals(
+        values, func, compact=out is None and dtype is None, structural=dtype is None
+    )
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
         return NotImplemented
@@ -531,27 +540,28 @@ def protected_concatenate_function(
         raise TypeError(msg)
 
     field_kwargs = {key: value for key, value in kwargs.items() if key not in {"axis", "out"}}
+    if not sequence.has_protected:
+        msg = "concatenate with protected out requires at least one protected input."
+        raise TypeError(msg)
     results: dict[str, NumpyProtectedValue] = {}
-    for name, axes_count in template.protected_axes.items():
-        if not sequence.has_protected:
-            msg = "concatenate with protected out requires at least one protected input."
-            raise TypeError(msg)
-
-        field_values = sequence.values_by_field[name]
+    for name, entries in sequence.values_by_field.items():
+        axes_count = template.protected_axes[name]
         if axis is None:
             # NumPy accepts a single concatenation axis, so collapse batch axes
             # first. An explicit size also handles zero-sized protected suffixes.
-            flattened = []
-            for field_value in field_values:
-                shape = (
-                    value_shape(field_value) if hasattr(field_value, "shape") else np.shape(cast("Any", field_value))
+            field_values = [
+                np.reshape(
+                    cast("Any", entry),
+                    flattened_batch_shape(
+                        value_shape(entry) if hasattr(entry, "shape") else np.shape(cast("Any", entry)), axes_count
+                    ),
                 )
-                flattened.append(np.reshape(cast("Any", field_value), flattened_batch_shape(shape, axes_count)))
-            field_values = flattened
+                for entry in entries
+            ]
             mapped_axis = 0
         else:
-            batch_ndim = value_ndim(template.values[name]) - axes_count
-            mapped_axis = normalize_axis(axis, batch_ndim)
+            field_values = entries
+            mapped_axis = normalize_axis(axis, template.batch_ndim)
 
         out_value = out_internals.values[name] if out_internals is not None else out
         result = func(field_values, axis=mapped_axis, out=out_value, **field_kwargs)
@@ -561,7 +571,7 @@ def protected_concatenate_function(
     if out is not None:
         return out
 
-    return template.create(results)
+    return sequence.create(results)
 
 
 @numpy_function.register(np.stack)
@@ -574,8 +584,11 @@ def protected_stack_function(
     axis = params.arguments.get("axis", 0)
     out = params.arguments.get("out", None)
 
+    dtype = params.arguments.get("dtype")
     out_internals = numpy_axis_protected_internals(out, broadcast=False)
-    sequence = _extract_protected_value_sequence_internals(values, func)
+    sequence = _extract_protected_value_sequence_internals(
+        values, func, compact=out is None and dtype is None, structural=dtype is None
+    )
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
         return NotImplemented
@@ -584,29 +597,36 @@ def protected_stack_function(
         msg = "out must use the same protected_axes layout as input values."
         raise ValueError(msg)
 
+    if out is not None and out_internals is None and len(template.protected_axes) != 1:
+        msg = "non-protected out is only supported for single-field protected objects."
+        raise TypeError(msg)
+
     if not isinstance(axis, int):
         msg = "stack axis must be an int."
         raise TypeError(msg)
 
+    if not sequence.has_protected:
+        msg = "stack with protected out requires at least one protected input."
+        raise TypeError(msg)
     results: dict[str, NumpyProtectedValue] = {}
-    for name, axes_count in template.protected_axes.items():
-        if not sequence.has_protected:
-            msg = "stack with protected out requires at least one protected input."
-            raise TypeError(msg)
+    for name, field_values in sequence.values_by_field.items():
+        mapped_axis = normalize_axis(axis, template.batch_ndim, allow_endpoint=True)
 
-        field_values = sequence.values_by_field[name]
-        batch_ndim = value_ndim(template.values[name]) - axes_count
-        mapped_axis = normalize_axis(axis, batch_ndim, allow_endpoint=True)
-
-        out_value = out_internals.values[name] if out_internals is not None else None
-        result = func(field_values, axis=mapped_axis, out=out_value)
+        out_value = out_internals.values[name] if out_internals is not None else out
+        result = func(
+            field_values,
+            axis=mapped_axis,
+            out=out_value,
+            dtype=dtype,
+            casting=params.arguments.get("casting", "same_kind"),
+        )
         if out_value is None:
             results[name] = result
 
     if out is not None:
         return out
 
-    return template.create(results)
+    return sequence.create(results)
 
 
 _NDARRAY_ARRAY_FUNCTION = getattr(np.ndarray, "__array_function__", None)

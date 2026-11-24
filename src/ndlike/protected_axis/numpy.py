@@ -328,15 +328,14 @@ class NumpyAxisProtected[
     def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:
         require_effective_fields(self._effective_protected_axes)
         prepared = self._prepare_assignment_value(value)
-        values = self.protected_values()
-        candidate_values = self._coerce_assignment_value(prepared)
-        logical_shape = self._protected_batch_shape(values)
-        for name, axes in self._effective_protected_axes.items():
-            if name in self.broadcasted_batch and batch_shape(value_shape(values[name]), axes) != logical_shape:
-                msg = "Indexed assignment requires fully expanded broadcasted fields."
-                raise ValueError(msg)
-            full_index = self._index_with_protected_axes(index, axes)
-            cast("Any", values[name])[full_index] = candidate_values[name]
+        self._set_protected_items(
+            prepared,
+            self._coerce_assignment_value(prepared),
+            field_index=lambda axes: self._index_with_protected_axes(index, axes),
+            broadcast=_broadcast_batch,
+            clone=lambda v: v.copy(),
+            dtype_of=lambda v: v.dtype if isinstance(v, (np.ndarray, np.generic)) else None,
+        )
 
     def _postprocess_ufunc_result(
         self,

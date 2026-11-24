@@ -175,8 +175,14 @@ Set `revalidate_on_batch_change: ClassVar[bool] = True` if your constructor
 checks batch-wide invariants or your class relies on hand-written slots, a custom
 `__dict__`, or descriptors for field storage. This routes batch rearrangements
 through `with_protected_values`. Extra attributes in an ordinary instance dictionary
-already trigger that fallback. Operations that can introduce values or combine
-objects, such as arithmetic and stacking, use ordinary construction when rebuilding.
+already trigger that fallback.
+
+Stacking and concatenating protected inputs uses their lowest common ancestor.
+It must be concrete and have the same protected layout as every input. Static
+dataclass fields on that class must compare equal. Override the classmethod
+`_combine_sequence_metadata(cls, items, *, func)` to return overrides for individual
+fields. For example, returning `{"order": max(item.order for item in items)}`
+combines orders and leaves the equality check in place for every other field.
 
 ### PyTorch and JAX backends
 

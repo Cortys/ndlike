@@ -4,16 +4,22 @@ from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
 from collections.abc import Sequence
-from dataclasses import dataclass, fields, is_dataclass, replace
+from copy import copy
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from functools import wraps
-from inspect import BoundArguments, signature
+from inspect import BoundArguments, isabstract, signature
 import math
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, SupportsIndex, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, SupportsIndex, cast, overload
 
 import numpy as np
 
+from ndlike.tuple import BroadcastTuple
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
+
+
+_UNSET = object()
 
 
 class EffectiveProtectedAxes:
@@ -53,6 +59,8 @@ class _AxisProtectedBase[V, R](metaclass=ABCMeta):
     unless transforming an empty logical batch into a nonempty one, storing
     undeclared attributes in the instance dictionary, overriding ``__new__`` / ``protected_values``
     / ``with_protected_values``, or setting ``revalidate_on_batch_change = True``.
+    Compatible sequences and indexed replacements from validated instances use
+    the same structural reconstruction safeguards.
     """
 
     protected_axes: ClassVar[dict[str, int]]
@@ -83,30 +91,150 @@ class _AxisProtectedBase[V, R](metaclass=ABCMeta):
         Subclasses that rely on custom attribute storage should set
         ``revalidate_on_batch_change = True`` to use ordinary construction.
         """
-        cls = type(self)
-        axes = self._effective_protected_axes
-        names = cls._structural_field_names
-        if (
-            names is None
-            or cls.revalidate_on_batch_change
-            or cls.with_protected_values is not cls._default_with_protected_values
-            or cls.protected_values is not cls._default_protected_values
-            or values.keys() != axes.keys()
-            or not vars(self).keys() <= names
-        ):
+        if not _can_rebuild_structurally(type(self), self) or values.keys() != self._effective_protected_axes.keys():
             return self.with_protected_values(values, func)
+        return cast("R", self._from_structural_fields(self, values))
 
+    @classmethod
+    def _from_structural_fields(cls, source: _AxisProtectedBase[Any, Any], updates: Mapping[str, Any]) -> Self:
         obj = object.__new__(cls)
-        for name in names:
-            if name in values:
-                value = values[name]
+        for name in cast("frozenset[str]", cls._structural_field_names):
+            if name in updates:
+                value = updates[name]
             else:
                 try:
-                    value = object.__getattribute__(self, name)
+                    value = object.__getattribute__(source, name)
                 except AttributeError:
                     continue  # An init=False field can legitimately be unset.
             object.__setattr__(obj, name, value)
-        return cast("R", obj)
+        return obj
+
+    @classmethod
+    def _combine_sequence_metadata(cls, items: Sequence[Self], *, func: Callable | None) -> dict[str, Any]:
+        """Return overrides for static fields that have a domain-specific combination rule.
+
+        The common ancestor receives all protected inputs. Omitted static fields
+        must compare equal and retain the first input's value.
+        """
+        del items, func
+        return {}
+
+    def _compact_assignment_values(
+        self,
+        prepared: object,
+        current: Mapping[str, V],
+        candidates: Mapping[str, object],
+        field_index: Callable[[int], tuple[Any, ...]],
+    ) -> dict[str, V]:
+        if not isinstance(prepared, type(self)):
+            return {}
+        compact = {
+            name: value
+            for name, value in current.items()
+            if name in self.broadcasted_batch
+            and candidates[name] is value
+            and value_ndim(value) == self._effective_protected_axes[name]
+        }
+        if compact.keys() == current.keys():
+            # Even a no-op scalar update needs a valid logical index.
+            name = next(iter(current))
+            _ = cast("Any", current[name])[field_index(self._effective_protected_axes[name])]
+        return compact
+
+    def _assignment_is_compatible(
+        self,
+        prepared: object,
+        current: Mapping[str, V],
+        candidates: Mapping[str, object],
+        dtype_of: Callable[[object], Any],
+    ) -> bool:
+        """Check structural eligibility, destination static fields, and lossless leaf casts."""
+        return (
+            _can_rebuild_structurally(type(self), self)
+            and isinstance(prepared, type(self))
+            and self._effective_protected_axes == prepared._effective_protected_axes  # noqa: SLF001
+            and _static_fields_equal(self, prepared, self.protected_axes)
+            and all(_lossless_assignment(current[name], candidates[name], dtype_of) for name in current)
+        )
+
+    def _set_protected_items(
+        self,
+        prepared: object,
+        candidates: Mapping[str, object],
+        *,
+        field_index: Callable[[int], tuple[Any, ...]],
+        broadcast: Callable[[V, int, tuple[int, ...]], V],
+        clone: Callable[[V], V],
+        dtype_of: Callable[[object], Any],
+    ) -> None:
+        """Write compatible replacements directly; stage and validate all other assignments."""
+        current = self.protected_values()
+        logical_shape = self._protected_batch_shape(current)
+        compact = self._compact_assignment_values(prepared, current, candidates, field_index)
+        direct = self._assignment_is_compatible(prepared, current, candidates, dtype_of)
+
+        targets: dict[str, V] = {}
+        for name, axes in self._effective_protected_axes.items():
+            if name in compact:
+                continue
+            original = current[name]
+            value = broadcast(original, axes, logical_shape) if name in self.broadcasted_batch else original
+            if value is original and isinstance(value, np.ndarray) and not value.flags.writeable:
+                msg = f"Assignment destination for field {name!r} is read-only."
+                raise ValueError(msg)
+            # Direct writes update existing buffers in place and only clone newly expanded broadcasts.
+            # Validated writes stage into copies so a failed constructor cannot leak bad values into self.
+            targets[name] = value if direct and value is original else clone(value)
+
+        for name, target in targets.items():
+            cast("Any", target)[field_index(self._effective_protected_axes[name])] = candidates[name]
+
+        if direct:
+            for name, target in targets.items():
+                if target is not current[name]:
+                    object.__setattr__(self, name, target)
+            return
+
+        staged = current | targets
+        # A constructor may normalize a shared field in place before raising.
+        for name, value in compact.items():
+            if not isinstance(value, np.ndarray) or value.flags.writeable:
+                staged[name] = clone(value)
+        result = self.with_protected_values(staged, None)
+        if not isinstance(result, type(self)):
+            msg = "Indexed assignment must rebuild an instance of the destination type."
+            raise TypeError(msg)
+        self._apply_validated_assignment(current, result, compact)
+
+    def _apply_validated_assignment(self, current: Mapping[str, V], result: Self, compact: Mapping[str, V]) -> None:
+        """Write validated fields into existing buffers when compatible, else install them."""
+        for name, value in result.protected_values().items():
+            original = current[name]
+            if value is original:
+                continue
+            same_layout = (
+                value_shape(value) == value_shape(original)
+                and getattr(value, "dtype", None) == getattr(original, "dtype", None)
+                and getattr(value, "device", None) == getattr(original, "device", None)
+            )
+            if name in compact:
+                # Keep the shared object unless construction changed its value.
+                if same_layout and _metadata_equal(original, value):
+                    continue
+            elif same_layout and not (isinstance(original, np.ndarray) and not original.flags.writeable):
+                cast("Any", original)[...] = value
+                continue
+            object.__setattr__(self, name, value)
+        # Include constructor-owned slots and any undeclared dictionary state.
+        state = _stored_attributes(result)
+        if is_dataclass(result):
+            stale = _stored_attributes(self).keys() - state.keys()
+            for f in fields(result):
+                if not f.init and f.name in stale:
+                    object.__delattr__(self, f.name)
+        for name, value in state.items():
+            if name not in current and getattr(self, name, _UNSET) is not value:
+                object.__setattr__(self, name, value)
 
     def validate(self) -> None:
         """Raise if effective fields have insufficient rank or incompatible batches.
@@ -158,6 +286,79 @@ class _AxisProtectedBase[V, R](metaclass=ABCMeta):
     def shape(self) -> tuple[int, ...]:
         """Read the logical shape without collecting fields unless all broadcast."""
         return self._protected_batch_shape()
+
+
+def _stored_attributes(obj: object) -> dict[str, Any]:
+    """Collect an instance's dictionary and populated slots."""
+    state = cast("dict | tuple[dict | None, dict] | None", object.__getstate__(obj))
+    if isinstance(state, tuple):
+        dictionary, slots = state
+        return (dictionary or {}) | slots
+    return state or {}
+
+
+def _metadata_equal(left: Any, right: Any) -> bool:  # noqa: ANN401
+    if left is right:
+        return True
+    if getattr(left, "shape", None) != getattr(right, "shape", None):
+        return False
+    try:
+        equal = left == right
+        return bool(equal.all() if getattr(equal, "ndim", 0) else equal)
+    except (TypeError, ValueError, RuntimeError):
+        return False
+
+
+def _static_fields_equal(target: Any, source: Any, protected: Mapping[str, int] | set[str]) -> bool:  # noqa: ANN401
+    return all(
+        _metadata_equal(getattr(target, f.name, _UNSET), getattr(source, f.name, _UNSET))
+        for f in fields(target)
+        if f.name not in protected
+    )
+
+
+def _lossless_assignment(target: object, source: object, dtype_of: Callable[[object], Any]) -> bool:
+    if target is source:
+        return True
+    if isinstance(target, _AxisProtectedBase) and isinstance(source, _AxisProtectedBase):
+        return target._assignment_is_compatible(source, target.protected_values(), source.protected_values(), dtype_of)  # noqa: SLF001
+    if isinstance(target, BroadcastTuple) and isinstance(source, BroadcastTuple) and type(target) is type(source):
+        return (
+            _static_fields_equal(target, source, {"members"})
+            and len(target.members) == len(source.members)
+            and all(_lossless_assignment(t, s, dtype_of) for t, s in zip(target.members, source.members, strict=True))
+        )
+    return _lossless_dtype_cast(dtype_of(source), dtype_of(target))
+
+
+def _lossless_dtype_cast(src: Any, dst: Any) -> bool:  # noqa: ANN401
+    if src is None or dst is None:
+        return False
+    if src == dst:
+        return True
+    try:
+        src, dst = np.dtype(src), np.dtype(dst)
+    except TypeError:
+        return False
+    if src.kind in "iu" and dst.kind in "fc":
+        # NumPy's "safe" casting also accepts int64 -> float64, which rounds large IDs.
+        return 8 * src.itemsize - int(src.kind == "i") <= np.finfo(dst).nmant + 1
+    return src.kind in "biufc" and dst.kind in "biufc" and bool(np.can_cast(src, dst, casting="safe"))
+
+
+def _can_rebuild_structurally(cls: type[_AxisProtectedBase], source: _AxisProtectedBase) -> bool:
+    """Check the result class's construction hooks and the source's stored state."""
+    # Resolve the descriptors before reading their cached structural field names.
+    _ = cls._effective_protected_axes, source._effective_protected_axes  # noqa: SLF001
+    source_names = type(source)._structural_field_names  # noqa: SLF001
+    return (
+        cls._structural_field_names is not None
+        and not cls.revalidate_on_batch_change
+        and cls.with_protected_values is cls._default_with_protected_values
+        and cls.protected_values is cls._default_protected_values
+        and source_names is not None
+        and vars(source).keys() <= source_names
+    )
 
 
 def require_effective_fields(axes: Mapping[str, int]) -> None:
@@ -295,6 +496,14 @@ class ProtectedValueSequenceInternals[V, R]:
     has_protected: bool
     template: AxisProtectedInternals[V, R] | None
     values_by_field: dict[str, list[object]]
+    compact_values: dict[str, V] = field(default_factory=dict)
+    creator: AxisProtectedCreator[V, R] | None = None
+
+    def create(self, values: dict[str, V]) -> R:
+        if self.creator is None:
+            msg = "Cannot rebuild a sequence without protected inputs."
+            raise TypeError(msg)
+        return self.creator(self.compact_values | values)
 
 
 class InternalsExtractor[V, R](Protocol):
@@ -443,52 +652,132 @@ def apply_shape_only[V, R](
     return apply_unary(internals, field_op, structural=structural)
 
 
+def _common_sequence_class(items: Sequence[_AxisProtectedBase]) -> type[_AxisProtectedBase]:
+    classes = tuple(dict.fromkeys(type(item) for item in items))
+    cls = next(base for base in classes[0].__mro__ if all(issubclass(t, base) for t in classes))
+    if not issubclass(cls, _AxisProtectedBase):
+        msg = f"Protected inputs need a common AxisProtected ancestor, got {cls.__name__}."
+        raise TypeError(msg)
+    if any(
+        t.protected_axes != cls.protected_axes or t._effective_protected_axes != cls._effective_protected_axes  # noqa: SLF001
+        for t in classes
+    ):
+        msg = "All protected inputs must share identical protected_axes definitions with their common ancestor."
+        raise ValueError(msg)
+    if any(t.broadcasted_batch != cls.broadcasted_batch for t in classes):
+        msg = "All protected inputs must share identical broadcasted_batch definitions with their common ancestor."
+        raise ValueError(msg)
+    if isabstract(cls):
+        msg = f"Protected inputs need a concrete common ancestor, got abstract class {cls.__name__}."
+        raise TypeError(msg)
+    return cls
+
+
+def _sequence_metadata(
+    cls: type[_AxisProtectedBase], items: Sequence[_AxisProtectedBase], func: Callable | None
+) -> dict[str, Any]:
+    if not is_dataclass(cls):
+        return {}
+    overrides = cls._combine_sequence_metadata(items, func=func)
+    static_names = [f.name for f in fields(cls) if f.name not in cls.protected_axes]
+    if unknown := overrides.keys() - static_names:
+        msg = f"Sequence metadata overrides must name static fields of {cls.__name__}, got {sorted(unknown)}."
+        raise ValueError(msg)
+    metadata = dict(overrides)
+    for name in static_names:
+        if name in overrides:
+            continue
+        first = getattr(items[0], name, _UNSET)
+        if any(not _metadata_equal(first, getattr(item, name, _UNSET)) for item in items[1:]):
+            msg = f"Static field {name!r} must compare equal across {cls.__name__} inputs."
+            raise ValueError(msg)
+        if first is not _UNSET:
+            metadata[name] = first
+    return metadata
+
+
+def _sequence_creator[V, R](
+    inputs: list[AxisProtectedInternals[V, R]], *, structural: bool
+) -> AxisProtectedCreator[V, R]:
+    first = inputs[0]
+    items = [item.owner for item in inputs]
+    cls = _common_sequence_class(items)
+    metadata = _sequence_metadata(cls, items, first.func)
+    source = next((item for item in items if type(item) is cls), None)
+    template = items[0] if source is None else source
+    can_structural = (
+        structural
+        and _can_rebuild_structurally(cls, template)
+        and all(_can_rebuild_structurally(type(item), item) for item in items)
+    )
+    if can_structural and (
+        source is None or cls._with_protected_values_structural is _AxisProtectedBase._with_protected_values_structural  # noqa: SLF001
+    ):
+        return lambda values: cast("R", cls._from_structural_fields(template, metadata | values))
+
+    if source is not None:
+        receiver = source
+        if any(getattr(source, key, _UNSET) is not value for key, value in metadata.items()):
+            # Reconstruction hooks read static metadata from their receiver.
+            receiver = copy(source)
+            for key, value in metadata.items():
+                object.__setattr__(receiver, key, value)
+        rebuild = receiver._with_protected_values_structural if can_structural else receiver.with_protected_values  # noqa: SLF001
+        return lambda values: rebuild(values, first.func)
+
+    init_metadata = (
+        {f.name: metadata[f.name] for f in fields(cls) if f.init and f.name in metadata} if is_dataclass(cls) else {}
+    )
+    return lambda values: cast("R", cls(**init_metadata, **values))
+
+
 def extract_protected_value_sequence_internals[V, R](
     values: tuple[object, ...],
     func: Callable | None = None,
     *,
-    extract: InternalsExtractor[V, R],
+    extract: Callable[[object, Callable | None], AxisProtectedInternals[V, R] | None],
+    broadcast: Callable[[V, int, tuple[int, ...]], V] | None = None,
+    compact: bool = True,
+    structural: bool = True,
 ) -> ProtectedValueSequenceInternals[V, R]:
-    """Extract and align sequence fields using a backend-typed extractor.
+    """Align raw and protected operands in order, expanding only fields needed by the operation."""
+    extracted = [extract(value, func) for value in values]
+    inputs = [item for item in extracted if item is not None]
+    if not inputs:
+        return ProtectedValueSequenceInternals(False, None, {})
 
-    Args:
-        values: Protected objects and unprotected operands to align.
-        func: Function context passed to the extractor.
-        extract: Backend adapter that determines the protected-value family.
+    first = inputs[0]
+    axes = first.protected_axes
+    require_effective_fields(axes)
+    all_protected = len(inputs) == len(values)
+    create = _sequence_creator(inputs, structural=structural and all_protected)
 
-    Returns:
-        Aligned fields and the first protected object's internals. Unprotected
-        operands preceding the first protected object are skipped.
+    shared = {
+        name: first.values[name]
+        for name in first.broadcasted_batch
+        if compact
+        and all_protected
+        and value_ndim(first.values[name]) == axes[name]
+        and all(item.values[name] is first.values[name] for item in inputs)
+    }
+    if shared.keys() == axes.keys():
+        # One physical field must carry the resulting logical batch shape.
+        del shared[next(iter(axes))]
 
-    Raises:
-        ValueError: If protected inputs use different protected-axis layouts.
-    """
-    template: AxisProtectedInternals[V, R] | None = None
-    values_by_field: dict[str, list[object]] = {}
-    for value in values:
-        internals = extract(value, func)
-        if internals is None:
-            if template is None:
-                continue
-            for name in template.protected_axes:
-                values_by_field[name].append(value)
+    values_by_field = {}
+    for name, count in axes.items():
+        if name in shared:
             continue
-
-        if template is None:
-            template = internals
-            require_effective_fields(template.protected_axes)
-            values_by_field = {name: [] for name in internals.protected_axes}
-        elif internals.protected_axes != template.protected_axes:
-            msg = "All protected inputs must share identical protected_axes definitions."
-            raise ValueError(msg)
-        elif internals.broadcasted_batch != template.broadcasted_batch:
-            msg = "All protected inputs must share identical broadcasted_batch definitions."
-            raise ValueError(msg)
-
-        for name in template.protected_axes:
-            values_by_field[name].append(internals.values[name])
-
-    return ProtectedValueSequenceInternals(template is not None, template, values_by_field)
+        entries = []
+        for raw, item in zip(values, extracted, strict=True):
+            if item is None:
+                entries.append(raw)
+            elif broadcast is not None and name in item.broadcasted_batch:
+                entries.append(broadcast(item.values[name], count, item.batch_shape))
+            else:
+                entries.append(item.values[name])
+        values_by_field[name] = entries
+    return ProtectedValueSequenceInternals(True, first, values_by_field, shared, create)
 
 
 def map_batch_axes(value: object, protected_axes_count: int, batch_axes: tuple[int, ...]) -> tuple[int, ...]:

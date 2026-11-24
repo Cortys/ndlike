@@ -148,7 +148,7 @@ def test_unary_rebuilds_transformed_fields() -> None:
 
 def test_sequence_retains_typed_template_and_mixed_operand_order() -> None:
     first = _Protected({"left": _Value((2, 3)), "right": _Value((2,))})
-    second = _Protected({"left": _Value((5, 3)), "right": _Value((5,))})
+    second = _Protected(dict(first.values))
     leading, middle, trailing = object(), object(), object()
     sequence = extract_protected_value_sequence_internals(
         (leading, first, middle, second, trailing), _allowed, extract=_extract
@@ -157,7 +157,7 @@ def test_sequence_retains_typed_template_and_mixed_operand_order() -> None:
     assert sequence.template is not None
     assert sequence.template.values["left"] is first.values["left"]
     for name in first.protected_axes:
-        assert sequence.values_by_field[name] == [first.values[name], middle, second.values[name], trailing]
+        assert sequence.values_by_field[name] == [leading, first.values[name], middle, second.values[name], trailing]
     assert sequence.template.create(first.values).func is _allowed
 
 

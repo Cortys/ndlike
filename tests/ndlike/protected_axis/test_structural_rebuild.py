@@ -296,18 +296,21 @@ def test_hook_routing_opt_out_and_validating_operations(backend) -> None:
         lambda a: a + a,
         sum_fn,
         lambda a: where_fn(cond, a, a),
-        lambda a: stack_fn((a, a), 0),
-        lambda a: concat_fn((a, a), 0),
     ):
         before = len(inits)
         _ = op(x)
         assert len(inits) == before + 1
     assert structural == []
 
+    before = len(inits)
+    _ = stack_fn((x, x), 0), concat_fn((x, x), 0)
+    assert structural == [stack_fn, concat_fn]
+    assert len(inits) == before
+
     if name in ("numpy", "torch"):
         before = len(inits)
         x[0] = _arr(backend, np.zeros((3, 4)))
-        assert len(inits) == before
+        assert len(inits) == before + 1
 
 
 def test_fallbacks_for_non_plain_classes(backend) -> None:

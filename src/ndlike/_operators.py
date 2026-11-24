@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, Self, cast
+from typing import TYPE_CHECKING, Protocol, Self, cast
 
 import numpy as np
 
@@ -171,72 +171,60 @@ class InplaceArrayOperators[OpValueT](Protocol):
 class NumpyOperatorsMixin[OpValueT, OpResultT, CompResultT](np.lib.mixins.NDArrayOperatorsMixin):  # noqa: PLW1641
     """Type NumPy mixin operators without changing their dispatch behavior."""
 
-    __add__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__add__)
-    __radd__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__radd__)
-    __sub__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__sub__)
-    __rsub__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rsub__)
-    __mul__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__mul__)
-    __rmul__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rmul__)
-    __truediv__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__truediv__)
-    __rtruediv__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rtruediv__)
-    __floordiv__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__floordiv__)
-    __rfloordiv__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rfloordiv__)
-    __mod__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__mod__)
-    __rmod__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rmod__)
-    __matmul__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__matmul__)
-    __rmatmul__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rmatmul__)
-    __and__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__and__)
-    __rand__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rand__)
-    __or__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__or__)
-    __ror__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__ror__)
-    __xor__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__xor__)
-    __rxor__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rxor__)
-    __lshift__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__lshift__)
-    __rlshift__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rlshift__)
-    __rshift__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rshift__)
-    __rrshift__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rrshift__)
-    __pow__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__pow__)
-    __rpow__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rpow__)
+    __add__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__add__)
+    __radd__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__radd__)
+    __sub__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__sub__)
+    __rsub__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rsub__)
+    __mul__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__mul__)
+    __rmul__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rmul__)
+    __truediv__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__truediv__)
+    __rtruediv__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rtruediv__)
+    __floordiv__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__floordiv__)
+    __rfloordiv__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rfloordiv__)
+    __mod__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__mod__)
+    __rmod__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rmod__)
+    __matmul__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__matmul__)
+    __rmatmul__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rmatmul__)
+    __and__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__and__)
+    __rand__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rand__)
+    __or__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__or__)
+    __ror__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__ror__)
+    __xor__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__xor__)
+    __rxor__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rxor__)
+    __lshift__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__lshift__)
+    __rlshift__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rlshift__)
+    __rshift__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rshift__)
+    __rrshift__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rrshift__)
+    __pow__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__pow__)
+    __rpow__ = cast("Callable[[Self, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rpow__)
 
-    # The assigned native callables bind self when read through an instance.
-    if TYPE_CHECKING:
-
-        def __eq__(self, other: OpValueT, /) -> CompResultT:  # ty: ignore[incompatible-method-override]
-            """Compare array values for equality."""
-            ...
-
-        def __ne__(self, other: OpValueT, /) -> CompResultT:  # ty: ignore[incompatible-method-override]
-            """Compare array values for inequality."""
-            ...
-    else:
-        __eq__ = np.lib.mixins.NDArrayOperatorsMixin.__eq__
-        __ne__ = np.lib.mixins.NDArrayOperatorsMixin.__ne__
-
-    __lt__ = cast("Callable[[Any, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__lt__)
-    __le__ = cast("Callable[[Any, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__le__)
-    __gt__ = cast("Callable[[Any, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__gt__)
-    __ge__ = cast("Callable[[Any, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__ge__)
-    __pos__ = cast("Callable[[Any], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__pos__)
-    __neg__ = cast("Callable[[Any], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__neg__)
-    __abs__ = cast("Callable[[Any], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__abs__)
-    __invert__ = cast("Callable[[Any], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__invert__)
+    __eq__ = cast("Callable[[Self, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__eq__)
+    __ne__ = cast("Callable[[Self, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__ne__)
+    __lt__ = cast("Callable[[Self, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__lt__)
+    __le__ = cast("Callable[[Self, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__le__)
+    __gt__ = cast("Callable[[Self, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__gt__)
+    __ge__ = cast("Callable[[Self, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__ge__)
+    __pos__ = cast("Callable[[Self], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__pos__)
+    __neg__ = cast("Callable[[Self], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__neg__)
+    __abs__ = cast("Callable[[Self], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__abs__)
+    __invert__ = cast("Callable[[Self], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__invert__)
     __divmod__ = cast(
-        "Callable[[Any, OpValueT], tuple[OpResultT, OpResultT]]", np.lib.mixins.NDArrayOperatorsMixin.__divmod__
+        "Callable[[Self, OpValueT], tuple[OpResultT, OpResultT]]", np.lib.mixins.NDArrayOperatorsMixin.__divmod__
     )
     __rdivmod__ = cast(
-        "Callable[[Any, OpValueT], tuple[OpResultT, OpResultT]]", np.lib.mixins.NDArrayOperatorsMixin.__rdivmod__
+        "Callable[[Self, OpValueT], tuple[OpResultT, OpResultT]]", np.lib.mixins.NDArrayOperatorsMixin.__rdivmod__
     )
 
-    __iadd__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__iadd__)
-    __isub__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__isub__)
-    __imul__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__imul__)
-    __itruediv__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__itruediv__)
-    __ifloordiv__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__ifloordiv__)
-    __imod__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__imod__)
-    __ipow__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__ipow__)
-    __imatmul__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__imatmul__)
-    __iand__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__iand__)
-    __ior__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__ior__)
-    __ixor__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__ixor__)
-    __ilshift__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__ilshift__)
-    __irshift__ = cast("Callable[[Any, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__irshift__)
+    __iadd__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__iadd__)
+    __isub__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__isub__)
+    __imul__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__imul__)
+    __itruediv__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__itruediv__)
+    __ifloordiv__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__ifloordiv__)
+    __imod__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__imod__)
+    __ipow__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__ipow__)
+    __imatmul__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__imatmul__)
+    __iand__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__iand__)
+    __ior__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__ior__)
+    __ixor__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__ixor__)
+    __ilshift__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__ilshift__)
+    __irshift__ = cast("Callable[[Self, OpValueT], Self]", np.lib.mixins.NDArrayOperatorsMixin.__irshift__)

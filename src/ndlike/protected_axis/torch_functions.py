@@ -98,10 +98,16 @@ def torch_axis_protected_internals(
 
 
 def _extract_protected_value_sequence_internals(
-    values: tuple[object, ...], func: Callable | None = None
+    values: tuple[object, ...], func: Callable | None, *, compact: bool, structural: bool = True
 ) -> ProtectedValueSequenceInternals[TorchProtectedValue, Any]:
-    """Extract and align protected values for sequence operations."""
-    return extract_protected_value_sequence_internals(values, func, extract=torch_axis_protected_internals)
+    return extract_protected_value_sequence_internals(
+        values,
+        func,
+        extract=lambda value, ctx: torch_axis_protected_internals(value, ctx, broadcast=False),
+        broadcast=_broadcast_batch,
+        compact=compact,
+        structural=structural,
+    )
 
 
 def _normalize_batch_reduction_dims(dim: object, batch_ndim: int) -> int | tuple[int, ...]:
@@ -648,7 +654,7 @@ def protected_cat_function(
     out = mutable_kwargs.get("out")
 
     out_internals = torch_axis_protected_internals(out, broadcast=False)
-    sequence = _extract_protected_value_sequence_internals(values, func)
+    sequence = _extract_protected_value_sequence_internals(values, func, compact=out is None)
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
         return NotImplemented
@@ -660,15 +666,12 @@ def protected_cat_function(
     if not isinstance(dim, int):
         return NotImplemented
 
+    if not sequence.has_protected:
+        msg = "cat with protected out requires at least one protected input."
+        raise TypeError(msg)
     results: dict[str, TorchProtectedValue] = {}
-    for name, axes_count in template.protected_axes.items():
-        if not sequence.has_protected:
-            msg = "cat with protected out requires at least one protected input."
-            raise TypeError(msg)
-
-        field_values = sequence.values_by_field[name]
-        batch_ndim = value_ndim(template.values[name]) - axes_count
-        mapped_dim = normalize_axis(dim, batch_ndim)
+    for name, field_values in sequence.values_by_field.items():
+        mapped_dim = normalize_axis(dim, template.batch_ndim)
 
         out_value = out_internals.values[name] if out_internals is not None else None
         if isinstance(template.values[name], np.ndarray):
@@ -685,7 +688,7 @@ def protected_cat_function(
     if out is not None:
         return out
 
-    return template.create(results)
+    return sequence.create(results)
 
 
 @torch_function.register(torch.gather)
@@ -757,7 +760,7 @@ def protected_stack_function(
     out = mutable_kwargs.get("out")
 
     out_internals = torch_axis_protected_internals(out, broadcast=False)
-    sequence = _extract_protected_value_sequence_internals(values, func)
+    sequence = _extract_protected_value_sequence_internals(values, func, compact=out is None)
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
         return NotImplemented
@@ -769,15 +772,12 @@ def protected_stack_function(
     if not isinstance(dim, int):
         return NotImplemented
 
+    if not sequence.has_protected:
+        msg = "stack with protected out requires at least one protected input."
+        raise TypeError(msg)
     results: dict[str, TorchProtectedValue] = {}
-    for name, axes_count in template.protected_axes.items():
-        if not sequence.has_protected:
-            msg = "stack with protected out requires at least one protected input."
-            raise TypeError(msg)
-
-        field_values = sequence.values_by_field[name]
-        batch_ndim = value_ndim(template.values[name]) - axes_count
-        mapped_dim = normalize_axis(dim, batch_ndim, allow_endpoint=True)
+    for name, field_values in sequence.values_by_field.items():
+        mapped_dim = normalize_axis(dim, template.batch_ndim, allow_endpoint=True)
 
         out_value = out_internals.values[name] if out_internals is not None else None
         if isinstance(template.values[name], np.ndarray):
@@ -794,7 +794,7 @@ def protected_stack_function(
     if out is not None:
         return out
 
-    return template.create(results)
+    return sequence.create(results)
 
 
 def _where_arguments(args: tuple[object, ...], kwargs: dict[str, Any]) -> tuple[object, object, object] | None:

@@ -93,6 +93,16 @@ def _mixed_array_numpy() -> MixedArrayNumpy:
     )
 
 
+def test_weak_type_follows_the_representative_field_under_jit() -> None:
+    weak = jnp.asarray(2)
+    strong = jnp.asarray(2, dtype=weak.dtype)
+    read_flag = jax.jit(lambda value: value.weak_type)
+
+    for value, expected in ((PairArray(weak, strong), True), (PairArray(strong, weak), False)):
+        assert value.weak_type is expected
+        assert bool(read_flag(value)) is expected
+
+
 def test_single_field_jax_functions_preserve_type() -> None:
     x = SingleArray(jnp.arange(6.0).reshape(2, 3))
 
@@ -150,6 +160,56 @@ def test_reshape_method_preserves_protected_axes() -> None:
     assert tuple(reshaped_with_tuple.array.shape) == (1, 6, 4)
     assert reshaped_with_tuple.shape == (1, 6)
     assert reshaped_with_tuple.protected_shape == (4,)
+
+
+def test_reshape_method_supports_sequences_vectors_scalars_and_jit() -> None:
+    class _Dim:
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+        def __index__(self) -> int:
+            return self.value
+
+    x = SingleArray(jnp.arange(24.0).reshape(2, 3, 4))
+
+    for shape_2d in (range(3, 1, -1), np.array([3, 2]), jnp.array([3, 2])):
+        reshaped = x.reshape(shape_2d)  # ty: ignore[invalid-argument-type]
+        assert isinstance(reshaped, SingleArray)
+        assert reshaped.shape == (3, 2)
+        assert reshaped.protected_shape == (4,)
+        assert jnp.array_equal(reshaped.array, x.array.reshape(3, 2, 4))
+
+    for shape_1d in (np.int64(6), np.array(6), jnp.array(6), _Dim(6)):
+        reshaped = x.reshape(shape_1d)  # ty: ignore[invalid-argument-type]
+        assert isinstance(reshaped, SingleArray)
+        assert reshaped.shape == (6,)
+        assert reshaped.protected_shape == (4,)
+        assert jnp.array_equal(reshaped.array, x.array.reshape(6, 4))
+
+    for bad_2d in (np.array([[3, 2]]), jnp.array([[3, 2]])):
+        with pytest.raises(TypeError, match="reshape shape must be an int, tuple or list"):
+            x.reshape(bad_2d)  # ty: ignore[invalid-argument-type]
+
+    jitted_range = jax.jit(lambda v: v.reshape(range(3, 1, -1)))(x)
+    assert isinstance(jitted_range, SingleArray)
+    assert jitted_range.shape == (3, 2)
+
+    jitted_scalar = jax.jit(lambda v: v.reshape(np.int64(6)))(x)
+    assert isinstance(jitted_scalar, SingleArray)
+    assert jitted_scalar.shape == (6,)
+
+    mixed = _mixed_array_numpy()
+    for shape_2d in (range(3, 1, -1), np.array([3, 2]), jnp.array([3, 2])):
+        reshaped_mixed = mixed.reshape(shape_2d)  # ty: ignore[invalid-argument-type]
+        assert isinstance(reshaped_mixed, MixedArrayNumpy)
+        assert reshaped_mixed.shape == (3, 2)
+        np.testing.assert_array_equal(reshaped_mixed.sidecar, np.reshape(mixed.sidecar, (3, 2, 4)))
+
+    for shape_1d in (np.int64(6), np.array(6), jnp.array(6), _Dim(6)):
+        reshaped_mixed = mixed.reshape(shape_1d)  # ty: ignore[invalid-argument-type]
+        assert isinstance(reshaped_mixed, MixedArrayNumpy)
+        assert reshaped_mixed.shape == (6,)
+        np.testing.assert_array_equal(reshaped_mixed.sidecar, np.reshape(mixed.sidecar, (6, 4)))
 
 
 def test_take_along_axis_preserves_protected_axes() -> None:

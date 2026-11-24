@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from inspect import isabstract
 from typing import TYPE_CHECKING, Any, ClassVar, Never, Self, assert_type, get_origin, get_protocol_members, override
@@ -35,12 +36,21 @@ if TYPE_CHECKING:
     def _check_native_tensor_protocol(tensor: torch.Tensor) -> WeakArrayLike[torch.Tensor]:
         return tensor
 
-    def _check_dispatched_method_types(protocol: TorchLike, implementation: _Tensor) -> None:
+    def _check_dispatched_method_types(
+        protocol: TorchLike, base: TorchLikeImplementation, implementation: _Tensor
+    ) -> None:
         type Result = TorchLike[Any]
 
         assert_type(protocol.T, Result)
         assert_type(protocol.mT, Result)
         assert_type(protocol.mH, Result)
+        assert_type(base.reshape(2, 3), Result)
+        assert_type(base.reshape([2, 3]), Result)
+        assert_type(base.squeeze(), Result)
+        assert_type(base.unsqueeze(0), Result)
+        assert_type(base.movedim(0, 1), Result)
+        assert_type(base.broadcast_to((2, 3)), Result)
+        assert_type(base.broadcast_to(2, 3), Result)
         assert_type(implementation.T, Result)
         assert_type(implementation.mT, Result)
         assert_type(implementation.mH, Result)
@@ -187,9 +197,154 @@ def test_torch_like_implementation_metadata_conveniences(
     assert protected.numel() == protected.nelement() == expected_numel
 
 
+def test_torch_like_implementation_shaping_dispatch() -> None:
+    calls: list[tuple[Any, tuple[Any, ...], dict[str, Any]]] = []
+
+    class _RecordingTorch(TorchLikeImplementation):
+        @property
+        def shape(self) -> tuple[int, ...]:
+            return (2, 3)
+
+        @property
+        def dtype(self) -> torch.dtype:
+            return torch.float32
+
+        @property
+        def device(self) -> torch.device:
+            return torch.device("cpu")
+
+        @override
+        @property
+        def mT(self) -> Self:
+            return self
+
+        @override
+        @property
+        def mH(self) -> Self:
+            return self
+
+        def __getitem__(self, index, /) -> Self:
+            del index
+            return self
+
+        def __setitem__(self, index, value, /) -> None:
+            del index, value
+
+        def __array_namespace__(self, /, *, api_version: str | None = None) -> ModuleType:
+            del api_version
+            return torch
+
+        def __len__(self) -> int:
+            return 2
+
+        def __iter__(self) -> Iterator[Self]:
+            return iter(())
+
+        def to(self, *args: object, **kwargs: object) -> Self:
+            del args, kwargs
+            return self
+
+        @classmethod
+        def __torch_function__(cls, func, types, args=(), kwargs=None):  # noqa: ANN206
+            del cls, types
+            calls.append((func, args, {} if kwargs is None else dict(kwargs)))
+            return sentinel
+
+        def numpy(self, *, force: bool = False) -> np.ndarray:
+            del force
+            return np.empty((2, 3), dtype=np.float32)
+
+        def detach(self) -> Self:
+            return self
+
+    sentinel = _RecordingTorch()
+    array = _RecordingTorch()
+
+    assert array.reshape(3, 2) is sentinel
+    assert calls[-1] == (torch.reshape, (array, (3, 2)), {})
+
+    assert array.reshape((3, 2)) is sentinel
+    assert calls[-1] == (torch.reshape, (array, (3, 2)), {})
+
+    assert array.reshape([3, 2]) is sentinel
+    assert calls[-1] == (torch.reshape, (array, [3, 2]), {})
+
+    assert array.reshape(torch.Size((3, 2))) is sentinel
+    assert calls[-1] == (torch.reshape, (array, torch.Size((3, 2))), {})
+
+    call_count = len(calls)
+    for unsupported in (range(3, 1, -1), deque([3, 2])):
+        with pytest.raises(TypeError):
+            array.reshape(unsupported)  # ty: ignore[invalid-argument-type]
+    assert len(calls) == call_count
+
+    assert array.squeeze() is sentinel
+    assert calls[-1] == (torch.squeeze, (array,), {})
+
+    assert array.squeeze(None) is sentinel
+    assert calls[-1] == (torch.squeeze, (array,), {})
+
+    assert array.squeeze(0) is sentinel
+    assert calls[-1] == (torch.squeeze, (array,), {"dim": 0})
+
+    assert array.squeeze((0, 1)) is sentinel
+    assert calls[-1] == (torch.squeeze, (array,), {"dim": (0, 1)})
+
+    assert array.unsqueeze(0) is sentinel
+    assert calls[-1] == (torch.unsqueeze, (array, 0), {})
+
+    assert array.movedim(0, 1) is sentinel
+    assert calls[-1] == (torch.movedim, (array, 0, 1), {})
+
+    assert array.broadcast_to((4, 2, 3)) is sentinel
+    assert calls[-1] == (torch.broadcast_to, (array, (4, 2, 3)), {})
+
+    assert array.broadcast_to(4, 2, 3) is sentinel
+    assert calls[-1] == (torch.broadcast_to, (array, (4, 2, 3)), {})
+
+    assert array.broadcast_to(size=(4, 2, 3)) is sentinel
+    assert calls[-1] == (torch.broadcast_to, (array,), {"size": (4, 2, 3)})
+
+
+def test_torch_protected_reshape_accepts_tuple_list_size_and_rejects_range_deque() -> None:
+    class _Dim:
+        def __index__(self) -> int:
+            return 6
+
+    x = _Tensor(torch.arange(24.0).reshape(2, 3, 4))
+
+    for shape_2d in ((3, 2), [3, 2], torch.Size((3, 2))):
+        reshaped = x.reshape(shape_2d)
+        assert isinstance(reshaped, _Tensor)
+        assert reshaped.shape == (3, 2)
+        assert reshaped.protected_shape == (4,)
+
+    for scalar_dim in (np.int64(6), torch.tensor(6), _Dim()):
+        dim: Any = scalar_dim
+        reshaped = x.reshape(dim)
+        assert isinstance(reshaped, _Tensor)
+        assert reshaped.shape == (6,)
+        assert reshaped.protected_shape == (4,)
+
+    for unsupported in (range(3, 1, -1), deque([3, 2])):
+        with pytest.raises(TypeError):
+            x.reshape(unsupported)  # ty: ignore[invalid-argument-type]
+
+
 def test_torch_protocol_is_not_widened_with_convenience_methods() -> None:
     members = get_protocol_members(TorchLike)
-    for name in ("dim", "ndimension", "numel", "nelement", "unsqueeze", "movedim", "broadcast_to", "squeeze"):
+    for name in (
+        "dim",
+        "ndimension",
+        "numel",
+        "nelement",
+        "reshape",
+        "gather",
+        "unsqueeze",
+        "movedim",
+        "broadcast_to",
+        "squeeze",
+    ):
         assert name not in members
 
 

@@ -143,6 +143,74 @@ def test_shape_functions_apply_to_all_fields() -> None:
     assert reshaped.second.shape == (3, 2)
 
 
+def test_reshape_method_supports_list_sequence_order_and_copy() -> None:
+    x = SingleArray(np.arange(24.0).reshape(2, 3, 4))
+
+    for result in (x.reshape(3, 2), x.reshape((3, 2)), x.reshape([3, 2]), x.reshape(range(3, 1, -1))):
+        assert isinstance(result, SingleArray)
+        assert result.shape == (3, 2)
+        assert result.protected_shape == (4,)
+        np.testing.assert_array_equal(result.array, x.array.reshape(3, 2, 4))
+
+    copied = x.reshape([3, 2], copy=True)
+    assert isinstance(copied, SingleArray)
+    assert not np.shares_memory(copied.array, x.array)
+    np.testing.assert_array_equal(copied.array, x.array.reshape(3, 2, 4))
+
+    viewed = x.reshape((3, 2), copy=False)
+    assert isinstance(viewed, SingleArray)
+    assert np.shares_memory(viewed.array, x.array)
+
+    transposed = x.swapaxes(0, 1)
+    assert isinstance(transposed, SingleArray)
+    with pytest.raises(ValueError, match="copy"):
+        transposed.reshape([6], copy=False)
+
+    f_ordered = x.reshape([3, 2], order="F", copy=True)
+    assert isinstance(f_ordered, SingleArray)
+    np.testing.assert_array_equal(f_ordered.array, np.reshape(x.array, (3, 2, 4), order="F", copy=True))
+
+    with pytest.raises(ValueError, match="order"):
+        x.reshape((3, 2), order="Z")
+
+
+def test_reshape_method_retains_scalar_ndarray_index_and_legacy_none() -> None:
+    class _Dim:
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+        def __index__(self) -> int:
+            return self.value
+
+    x = SingleArray(np.arange(24.0).reshape(2, 3, 4))
+
+    for scalar_shape in (np.int64(6), np.array(6), _Dim(6)):
+        reshaped = x.reshape(scalar_shape)  # ty: ignore[invalid-argument-type]
+        assert isinstance(reshaped, SingleArray)
+        assert reshaped.shape == (6,)
+        assert reshaped.protected_shape == (4,)
+        np.testing.assert_array_equal(reshaped.array, x.array.reshape(6, 4))
+
+    vec_reshaped = x.reshape(np.array([3, 2]))  # ty: ignore[invalid-argument-type]
+    assert isinstance(vec_reshaped, SingleArray)
+    assert vec_reshaped.shape == (3, 2)
+    assert vec_reshaped.protected_shape == (4,)
+    np.testing.assert_array_equal(vec_reshaped.array, x.array.reshape(3, 2, 4))
+
+    with pytest.raises(TypeError, match="reshape newshape"):
+        x.reshape(np.array([[3, 2]]))  # ty: ignore[invalid-argument-type]
+
+    for singleton in (SingleArray(np.arange(4.0)), SingleArray(np.arange(4.0).reshape(1, 4))):
+        legacy_none = singleton.reshape(None)  # ty: ignore[invalid-argument-type]
+        assert isinstance(legacy_none, SingleArray)
+        assert legacy_none.shape == (1,)
+        assert legacy_none.protected_shape == (4,)
+        np.testing.assert_array_equal(legacy_none.array, singleton.array.reshape(1, 4))
+
+    with pytest.raises(ValueError, match="cannot reshape"):
+        x.reshape(None)  # ty: ignore[invalid-argument-type]
+
+
 @pytest.mark.parametrize(
     ("axes", "shape"),
     [

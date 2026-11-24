@@ -7,14 +7,23 @@ from typing import Any, Never, assert_type, cast
 import numpy as np
 import pytest
 
-from ndlike.tuple.numpy import NumpyBroadcastTuple
+from ndlike.tuple.numpy import NumpyBroadcastTuple, NumpyMember
 
 
 def test_concrete_shape_result_typing():
     x: NumpyBroadcastTuple[tuple[np.ndarray, ...]] = NumpyBroadcastTuple((np.ones((2, 1)), np.ones(3)))
-    assert_type(x.reshape(6), NumpyBroadcastTuple[tuple[np.ndarray, ...]])
-    assert_type(x[0], NumpyBroadcastTuple[tuple[np.ndarray, ...]])
-    assert_type(x.T, NumpyBroadcastTuple[tuple[np.ndarray, ...]])
+    assert_type(x.reshape(6), NumpyBroadcastTuple[tuple[NumpyMember, ...]])
+    assert_type(x[0], NumpyBroadcastTuple[tuple[NumpyMember, ...]])
+    assert_type(x.T, NumpyBroadcastTuple[tuple[NumpyMember, ...]])
+
+
+def test_scalar_member_becomes_an_array_on_reshape():
+    value = NumpyBroadcastTuple((np.float64(2), np.arange(3)))
+    result = value.reshape(3, 1)
+    assert_type(result, NumpyBroadcastTuple[tuple[NumpyMember, ...]])
+    assert isinstance(result.members[0], np.ndarray)
+    np.testing.assert_array_equal(result.members[0], np.full((3, 1), 2.0))
+    assert isinstance(value.members[0], np.float64)
 
 
 def test_object_array_scalar_does_not_coerce_or_evaluate():
@@ -32,8 +41,10 @@ def test_object_array_scalar_does_not_coerce_or_evaluate():
     x = NumpyBroadcastTuple((member, np.arange(3)))
     indexed = x[1, 2]
     assert indexed.shape == ()
-    assert indexed.members[0].shape == ()
-    assert indexed.members[0].item() is token
+    scalar = indexed.members[0]
+    assert isinstance(scalar, np.ndarray)
+    assert scalar.shape == ()
+    assert scalar.item() is token
 
 
 def test_output_destinations_are_rejected_before_writing():

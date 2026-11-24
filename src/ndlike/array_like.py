@@ -395,6 +395,12 @@ class NumpyLikeImplementation[
     define ``__eq__``. Hashing follows the ordinary dataclass rules.
     """
 
+    if TYPE_CHECKING:
+
+        def _ndlike_shape_result(self) -> ShapeResultT:
+            """Expose the declared shape result for structural type inference."""
+            ...
+
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Preserve inherited equality before a subclass's dataclass decorator runs."""
         super().__init_subclass__(**kwargs)
@@ -504,10 +510,32 @@ class NumpyLikeImplementation[
             A transposed version of the NumpySample.
         """
         if len(axes) == 0:
-            return cast("ShapeResultT", np.transpose(self))
+            return np.transpose(self) # ty:ignore[invalid-explicit-return]
         if len(axes) == 1 and not isinstance(axes[0], int):
-            return cast("ShapeResultT", np.transpose(self, axes[0]))
+            return np.transpose(self, axes[0]) # ty:ignore[invalid-explicit-return]
         return np.transpose(self, axes)  # ty:ignore[no-matching-overload]
+
+    def reshape(
+        self,
+        *shape: int | Sequence[int],
+        order: str = "C",
+        copy: bool | None = None,
+    ) -> ShapeResultT:
+        """Return a reshaped version of the array."""
+        target: object = (
+            shape[0] if len(shape) == 1 and not isinstance(shape[0], int) and shape[0] is not None else shape
+        )
+        if copy is None:
+            return np.reshape(self, target, order=order)  # ty:ignore[no-matching-overload]
+        return np.reshape(self, target, order=order, copy=copy) # ty:ignore[no-matching-overload]
+
+    def squeeze(self, axis: int | tuple[int, ...] | None = None) -> ShapeResultT:
+        """Return the array with axes of length one removed."""
+        return np.squeeze(self, axis=axis)  # ty:ignore[invalid-explicit-return]
+
+    def swapaxes(self, axis1: int, axis2: int, /) -> ShapeResultT:
+        """Return the array with two axes swapped."""
+        return np.swapaxes(self, axis1, axis2) # ty:ignore[invalid-explicit-return]
 
     def copy(self, order: Order = "C") -> OwnerT:
         """Return a copy of the array."""

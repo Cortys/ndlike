@@ -197,8 +197,21 @@ class NumpyOperatorsMixin[OpValueT, OpResultT, CompResultT](np.lib.mixins.NDArra
     __rrshift__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rrshift__)
     __pow__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__pow__)
     __rpow__ = cast("Callable[[Any, OpValueT], OpResultT]", np.lib.mixins.NDArrayOperatorsMixin.__rpow__)
-    __eq__ = cast("Callable[[Any, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__eq__)
-    __ne__ = cast("Callable[[Any, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__ne__)
+
+    # The assigned native callables bind self when read through an instance.
+    if TYPE_CHECKING:
+
+        def __eq__(self, other: OpValueT, /) -> CompResultT:  # ty: ignore[incompatible-method-override]
+            """Compare array values for equality."""
+            ...
+
+        def __ne__(self, other: OpValueT, /) -> CompResultT:  # ty: ignore[incompatible-method-override]
+            """Compare array values for inequality."""
+            ...
+    else:
+        __eq__ = np.lib.mixins.NDArrayOperatorsMixin.__eq__
+        __ne__ = np.lib.mixins.NDArrayOperatorsMixin.__ne__
+
     __lt__ = cast("Callable[[Any, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__lt__)
     __le__ = cast("Callable[[Any, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__le__)
     __gt__ = cast("Callable[[Any, OpValueT], CompResultT]", np.lib.mixins.NDArrayOperatorsMixin.__gt__)

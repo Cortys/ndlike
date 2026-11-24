@@ -194,7 +194,7 @@ if TYPE_CHECKING:
         assert_type(leaf.at[0].set(leaf), _Leaf)
         leaf + 1.0  # ty: ignore[unsupported-operator]
 
-    def _check_numpy(array: _Numpy) -> None:
+    def _check_numpy(array: _Numpy, order: str) -> None:
         assert_type(array + 1.0, str)
         assert_type(1.0 - array, str)
         assert_type(-array, str)
@@ -204,6 +204,10 @@ if TYPE_CHECKING:
         assert_type(next(iter(array)), np.ndarray)
         assert_type(array.astype(np.float32), str)
         assert_type(array.T, np.ndarray)
+        assert_type(array.reshape(2, 3), np.ndarray)
+        assert_type(array.reshape([2, 3], order=order, copy=True), np.ndarray)
+        assert_type(array.squeeze(), np.ndarray)
+        assert_type(array.swapaxes(0, 1), np.ndarray)
         assert_type(divmod(array, 2.0), tuple[str, str])
         assert_type(divmod(2.0, array), tuple[str, str])
         array[0] = array
@@ -271,6 +275,8 @@ if TYPE_CHECKING:
         assert_type(array + 1.0, str)
         assert_type(array < 1.0, bool)
         assert_type(array.reshape(2, 3), np.ndarray)
+        assert_type(array.swapaxes(0, 1), np.ndarray)
+        assert_type(array.swapaxes(axis1=0, axis2=1), np.ndarray)
         assert_type(array.at[0].set(b"value"), int)
         assert_type(array.at[0].add(array), int)
         assert_type(array.at[0].get(), np.ndarray)
@@ -298,7 +304,7 @@ if TYPE_CHECKING:
         array.at[0].set(1.0)  # ty: ignore[invalid-argument-type]
         jf.jax_add(array, b"wrong")  # ty: ignore[no-matching-overload]
 
-    def _check_torch(array: _Torch, native: torch.Tensor) -> None:
+    def _check_torch(array: _Torch, native: torch.Tensor, size: torch.Size) -> None:
         assert_type(array + 1.0, str)
         assert_type(array // 2.0, str)
         assert_type(2.0 // array, str)
@@ -306,6 +312,14 @@ if TYPE_CHECKING:
         assert_type(2.0 % array, str)
         assert_type(array > 1.0, bool)
         assert_type(array.clone(), _Torch)
+        assert_type(array.reshape(2, 3), torch.Tensor)
+        assert_type(array.reshape([2, 3]), torch.Tensor)
+        assert_type(array.reshape(size), torch.Tensor)
+        assert_type(array.squeeze(), torch.Tensor)
+        assert_type(array.unsqueeze(0), torch.Tensor)
+        assert_type(array.movedim(0, 1), torch.Tensor)
+        assert_type(array.broadcast_to((2, 3)), torch.Tensor)
+        assert_type(array.broadcast_to(2, 3), torch.Tensor)
         assert_type(array.dim(), int)
         assert_type(array.ndimension(), int)
         assert_type(array.numel(), int)

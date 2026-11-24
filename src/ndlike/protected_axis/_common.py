@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from abc import ABCMeta, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from functools import wraps
 from inspect import BoundArguments, signature
 import math
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, SupportsIndex, cast, overload
 
 import numpy as np
 
@@ -602,6 +603,30 @@ def normalize_axes(axes: tuple[int, ...], ndim: int, *, allow_endpoint: bool = F
 def coerce_axis_tuple(axis: int | tuple[int, ...] | list[int]) -> tuple[int, ...]:
     """Convert axis input into a tuple form."""
     return (axis,) if isinstance(axis, int) else tuple(axis)
+
+
+def normalize_reshape_shape(
+    shape: object,
+    *,
+    array_types: type[Any] | tuple[type[Any], ...],
+    error_message: str,
+) -> tuple[Any, ...]:
+    """Extract logical batch target dimensions without converting array data."""
+    if isinstance(shape, (int, np.integer)):
+        return (shape,)
+    if isinstance(shape, (tuple, list)):
+        return tuple(1 if dim is None else dim for dim in shape)
+    if isinstance(shape, array_types):
+        if shape.ndim == 0:
+            return (shape,)
+        if shape.ndim == 1:
+            return tuple(shape)
+        raise TypeError(error_message)
+    if isinstance(shape, SupportsIndex):
+        return (shape,)
+    if isinstance(shape, Sequence) and not isinstance(shape, (str, bytes, bytearray)):
+        return tuple(1 if dim is None else dim for dim in shape)
+    raise TypeError(error_message)
 
 
 def _validate_nested_where_parity(

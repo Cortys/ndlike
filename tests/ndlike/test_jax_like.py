@@ -222,6 +222,11 @@ class TestProtocols:
         assert not hasattr(jnp.ones(3), "__jax_function__")
         assert "__jax_function__" not in get_protocol_members(JaxLike)
 
+    def test_jax_protocol_is_not_widened_with_convenience_methods(self) -> None:
+        members = get_protocol_members(JaxLike)
+        for name in ("swapaxes", "take_along_axis"):
+            assert name not in members
+
 
 class TestToJaxLike:
     """The ``to_jax_like`` dispatch."""
@@ -380,6 +385,8 @@ class TestWrappers:
             assert_type(original.mT, Result),
             assert_type(original.copy(), Result),
             assert_type(original.reshape(3, 2), Result),
+            assert_type(original.swapaxes(0, 1), Result),
+            assert_type(original.swapaxes(axis1=0, axis2=1), Result),
             assert_type(original.transpose(), Result),
             assert_type(original.ravel(), Result),
             assert_type(original.flatten(), Result),
@@ -417,7 +424,58 @@ class TestImplementationDefaults:
         assert self._wrapper().reshape(3, 2).shape == (3, 2)
 
     def test_reshape_with_sequence(self) -> None:
+        class _Dim:
+            def __init__(self, value: int) -> None:
+                self.value = value
+
+            def __index__(self) -> int:
+                return self.value
+
         assert self._wrapper().reshape((3, 2)).shape == (3, 2)
+        assert self._wrapper().reshape([3, 2]).shape == (3, 2)
+        assert self._wrapper().reshape(range(3, 1, -1)).shape == (3, 2)
+        assert self._wrapper().reshape(np.array([3, 2])).shape == (3, 2)  # ty: ignore[invalid-argument-type]
+        assert self._wrapper().reshape(jnp.array([3, 2])).shape == (3, 2)  # ty: ignore[invalid-argument-type]
+        for scalar_dim in (np.int64(6), np.array(6), jnp.array(6), _Dim(6)):
+            dim: Any = scalar_dim
+            assert self._wrapper().reshape(dim).shape == (6,)
+
+    def test_reshape_preserves_positional_order_and_original_shape_dispatch(self) -> None:
+        calls: list[tuple[Any, tuple[Any, ...], dict[str, Any]]] = []
+
+        @dataclass(frozen=True)
+        class _Recording(_Wrapper):
+            @classmethod
+            def __jax_function__(cls, func, types, args=(), kwargs=None):  # noqa: ANN206
+                del types
+                calls.append((func, args, {} if kwargs is None else dict(kwargs)))
+                return super().__jax_function__(func, (), args, kwargs)
+
+        array = _Recording(jnp.arange(6.0).reshape(2, 3))
+        list_shape = [3, 2]
+        assert array.reshape(list_shape, order="F").shape == (3, 2)
+        assert calls[-1] == (jax_reshape, (array, list_shape, "F"), {})
+        assert calls[-1][1][1] is list_shape
+
+        scalar_shape: Any = jnp.array(6)
+        assert array.reshape(scalar_shape).shape == (6,)
+        assert calls[-1] == (jax_reshape, (array, scalar_shape, "C"), {})
+        assert calls[-1][1][1] is scalar_shape
+
+        range_shape = range(3, 1, -1)
+        assert array.reshape(range_shape).shape == (3, 2)
+        assert calls[-1] == (jax_reshape, (array, range_shape, "C"), {})
+        assert calls[-1][1][1] is range_shape
+
+    def test_swapaxes(self) -> None:
+        wrapper = self._wrapper()
+        swapped = wrapper.swapaxes(0, 1)
+        assert isinstance(swapped, _Wrapper)
+        assert swapped.shape == (3, 2)
+        np.testing.assert_array_equal(swapped.array, jnp.swapaxes(wrapper.array, 0, 1))
+        swapped_kw = wrapper.swapaxes(axis1=0, axis2=1)
+        assert isinstance(swapped_kw, _Wrapper)
+        np.testing.assert_array_equal(swapped_kw.array, jnp.swapaxes(wrapper.array, 0, 1))
 
     def test_transpose_method_with_axes(self) -> None:
         assert self._wrapper().transpose(1, 0).shape == (3, 2)

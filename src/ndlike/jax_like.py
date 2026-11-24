@@ -30,6 +30,7 @@ from ndlike.jax_functions import (
     jax_matrix_transpose,
     jax_reshape,
     jax_squeeze,
+    jax_swapaxes,
     jax_transpose,
 )
 from ndlike.jax_operators import JaxOperatorsMixin
@@ -371,6 +372,12 @@ class JaxLikeImplementation[
     def devices(self) -> set[jax.Device]:
         """Return the devices containing the underlying array."""
 
+    if TYPE_CHECKING:
+
+        def _ndlike_shape_result(self) -> ShapeResultT:
+            """Expose the declared shape result for structural type inference."""
+            ...
+
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Preserve inherited equality and register concrete subclasses as JAX pytree nodes.
 
@@ -625,6 +632,18 @@ class JaxLikeImplementation[
         """
         shape = args[0] if len(args) == 1 and not isinstance(args[0], int) else args
         return jax_reshape(self, cast("Sequence[int]", shape), order)
+
+    def swapaxes(self, axis1: int, axis2: int) -> ShapeResultT:
+        """Return the array with two axes swapped.
+
+        Args:
+            axis1: The first axis.
+            axis2: The second axis.
+
+        Returns:
+            The array with the two axes swapped.
+        """
+        return jax_swapaxes(self, axis1, axis2)
 
     def transpose(self, *args: int | Sequence[int] | None) -> ShapeResultT:
         """Return a transposed version of the array.

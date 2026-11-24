@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, ClassVar, Never
 
@@ -69,12 +70,136 @@ def test_advanced_indexing_uses_logical_broadcast(backend, index):
     assert all(tuple(member.shape) == y.shape for member in y.members)
 
 
-@pytest.mark.parametrize("target", [(6,), (-1, 2), (1, 2, 3)])
+@pytest.mark.parametrize("target", [(6,), (-1, 2), (1, 2, 3), [6], [-1, 2], [1, 2, 3]])
 def test_reshape_uses_common_batch(backend, target):
     x = example(backend)
     y = x.reshape(target)
     assert type(y) is type(x)
     assert_members(y, tuple(np.broadcast_to(np.asarray(m), x.shape).reshape(target) for m in x.members))
+    if isinstance(target, tuple):
+        y_varargs = x.reshape(*target)
+        assert type(y_varargs) is type(x)
+        assert_members(y_varargs, tuple(np.broadcast_to(np.asarray(m), x.shape).reshape(target) for m in x.members))
+
+
+def test_reshape_can_replace_a_custom_member_with_a_native_array(backend):
+    class Custom:
+        shape = (2,)
+        ndim = 1
+
+        def __array_function__(self, func, types, args, kwargs) -> object:
+            return func(backend.array([1, 2]), *args[1:], **kwargs)
+
+        @classmethod
+        def __torch_function__(cls, func, types, args, kwargs=None) -> object:
+            return func(backend.array([1, 2]), *args[1:], **(kwargs or {}))
+
+        __jax_function__ = __torch_function__
+
+    custom = Custom()
+    for value, shape in (
+        (backend.cls((custom,)), (2, 1)),
+        (backend.cls((custom, backend.array(np.ones((3, 2))))), (3, 2)),
+    ):
+        result = value.reshape(shape)
+        assert isinstance(result, backend.cls)
+        assert isinstance(result.members[0], type(backend.array([1, 2])))
+        np.testing.assert_array_equal(result.members[0], np.resize([1, 2], shape))
+        assert value.members[0] is custom
+
+
+def test_reshape_packs_custom_outputs(backend):
+    class Custom:
+        shape = (2,)
+        ndim = 1
+
+        def __init__(self, start: int) -> None:
+            self.start = start
+
+        def outputs(self):
+            values = backend.array([[self.start, self.start + 1]])
+            return values, -values
+
+        def __array_function__(self, func, types, args, kwargs) -> tuple:
+            return self.outputs()
+
+        @classmethod
+        def __torch_function__(cls, func, types, args, kwargs) -> tuple:
+            return args[0].outputs()
+
+        __jax_function__ = __torch_function__
+
+    result = backend.cls((Custom(1), Custom(3))).reshape(1, 2)
+    assert isinstance(result, tuple)
+    assert len(result) == 2
+    for output, sign in zip(result, (1, -1), strict=True):
+        assert isinstance(output, backend.cls)
+        np.testing.assert_array_equal(output.members[0], sign * np.array([[1, 2]]))
+        np.testing.assert_array_equal(output.members[1], sign * np.array([[3, 4]]))
+
+
+def test_numpy_reshape_copy_option(backend):
+    if backend.name != "numpy":
+        pytest.skip("copy= option on reshape is NumPy-specific")
+    x = backend.cls((np.arange(6.0).reshape(2, 3), np.arange(6.0).reshape(2, 3) + 10))
+    copied = x.reshape([3, 2], copy=True)
+    assert type(copied) is type(x)
+    assert all(not np.shares_memory(a, b) for a, b in zip(copied.members, x.members, strict=True))
+    viewed = x.reshape((3, 2), copy=False)
+    assert all(np.shares_memory(a, b) for a, b in zip(viewed.members, x.members, strict=True))
+    default_copy = x.reshape(3, 2, copy=None)
+    assert_members(default_copy, tuple(m.reshape(3, 2) for m in x.members))
+    with pytest.raises(ValueError, match="order"):
+        x.reshape((3, 2), order="Z")
+
+
+def test_reshape_backend_shape_inputs(backend):
+    class _Dim:
+        def __index__(self) -> int:
+            return 6
+
+    x = example(backend)
+    expected_1d = tuple(np.broadcast_to(np.asarray(m), x.shape).reshape(6) for m in x.members)
+    expected_2d = tuple(np.broadcast_to(np.asarray(m), x.shape).reshape(3, 2) for m in x.members)
+
+    if backend.name == "torch":
+        for target in (backend.xp.Size((3, 2)), (3, 2), [3, 2]):
+            y = x.reshape(target)
+            assert type(y) is type(x)
+            assert_members(y, expected_2d)
+        for scalar in (np.int64(6), backend.array(6), _Dim()):
+            y = x.reshape(scalar)
+            assert type(y) is type(x)
+            assert_members(y, expected_1d)
+        for unsupported in (range(3, 1, -1), deque([3, 2])):
+            with pytest.raises(TypeError):
+                x.reshape(unsupported)
+    else:
+        for target in (range(3, 1, -1), np.array([3, 2])):
+            y = x.reshape(target)
+            assert type(y) is type(x)
+            assert_members(y, expected_2d)
+        if backend.name == "jax":
+            y_vec = x.reshape(backend.array(np.array([3, 2])))
+            assert type(y_vec) is type(x)
+            assert_members(y_vec, expected_2d)
+        scalars: list[Any] = [np.int64(6), np.array(6), _Dim()]
+        if backend.name == "jax":
+            scalars.append(backend.array(6))
+        for scalar in scalars:
+            y = x.reshape(scalar)
+            assert type(y) is type(x)
+            assert_members(y, expected_1d)
+
+
+def test_shaping_methods_are_centralized_at_runtime(backend):
+    if backend.name in ("numpy", "jax"):
+        centralized = ("reshape", "squeeze", "swapaxes")
+    else:
+        centralized = ("reshape", "squeeze", "unsqueeze", "movedim", "broadcast_to")
+    for name in centralized:
+        assert name not in backend.cls.__dict__
+        assert name not in backend.base.__dict__
 
 
 def test_shape_dispatch(backend):
@@ -127,6 +252,80 @@ def test_shape_method_conveniences(backend):
         else:
             swapped_kw = x.swapaxes(axis1=0, axis2=1)
             assert_members(swapped_kw, expected_t)
+
+
+def test_gather_method_conveniences(backend):
+    if backend.name == "numpy":
+        pytest.skip("gather/take_along_axis convenience methods are JAX/Torch-specific")
+    x = example(backend)
+    idx_raw = np.array([[2, 0], [1, 2]], dtype=np.int64)
+    idx = backend.array(idx_raw)
+    idx_axis0_raw = np.array([[1, 0, 1]], dtype=np.int64)
+    idx_axis0 = backend.array(idx_axis0_raw)
+
+    if backend.name == "jax":
+        gathered_default = x.take_along_axis(idx)
+        gathered_kw = x.take_along_axis(indices=idx_axis0, axis=0)
+        expected_default = tuple(
+            np.take_along_axis(np.broadcast_to(np.asarray(m), x.shape), idx_raw, axis=-1) for m in x.members
+        )
+        expected_axis0 = tuple(
+            np.take_along_axis(np.broadcast_to(np.asarray(m), x.shape), idx_axis0_raw, axis=0) for m in x.members
+        )
+        assert type(gathered_default) is type(x)
+        assert gathered_default.shape == (2, 2)
+        assert_members(gathered_default, expected_default)
+        assert gathered_kw.shape == (1, 3)
+        assert_members(gathered_kw, expected_axis0)
+
+        per_member_idx = backend.cls((idx, backend.array(np.array([[0, 1], [2, 0]], dtype=np.int64)), idx))
+        gathered_tuple_idx = x.take_along_axis(per_member_idx, axis=1)
+        assert type(gathered_tuple_idx) is type(x)
+        expected_per_member = tuple(
+            np.take_along_axis(np.broadcast_to(np.asarray(m), x.shape), np.asarray(i), axis=1)
+            for m, i in zip(x.members, per_member_idx.members, strict=True)
+        )
+        assert_members(gathered_tuple_idx, expected_per_member)
+    else:
+        gathered = x.gather(1, idx)
+        gathered_kw = x.gather(dim=0, index=idx_axis0)
+        expected = tuple(
+            np.take_along_axis(np.broadcast_to(np.asarray(m), x.shape), idx_raw, axis=1) for m in x.members
+        )
+        expected_axis0 = tuple(
+            np.take_along_axis(np.broadcast_to(np.asarray(m), x.shape), idx_axis0_raw, axis=0) for m in x.members
+        )
+        assert type(gathered) is type(x)
+        assert gathered.shape == (2, 2)
+        assert_members(gathered, expected)
+        assert gathered_kw.shape == (1, 3)
+        assert_members(gathered_kw, expected_axis0)
+
+        per_member_idx = backend.cls((idx, backend.array(np.array([[0, 1], [2, 0]], dtype=np.int64)), idx))
+        gathered_tuple_idx = x.gather(1, per_member_idx)
+        assert type(gathered_tuple_idx) is type(x)
+        expected_per_member = tuple(
+            np.take_along_axis(np.broadcast_to(np.asarray(m), x.shape), np.asarray(i), axis=1)
+            for m, i in zip(x.members, per_member_idx.members, strict=True)
+        )
+        assert_members(gathered_tuple_idx, expected_per_member)
+
+    @dataclass(frozen=True)
+    class Vector(backend.base):
+        data: Any
+        protected_axes: ClassVar[dict[str, int]] = {"data": 1}
+
+    vec = Vector(backend.array(np.arange(24.0).reshape(2, 3, 4)))
+    composed = backend.cls((vec, backend.array(np.arange(6.0).reshape(2, 3))))
+    gathered_composed = composed.take_along_axis(idx, axis=1) if backend.name == "jax" else composed.gather(1, idx)
+    assert type(gathered_composed) is type(composed)
+    assert type(gathered_composed.members[0]) is Vector
+    assert gathered_composed.shape == (2, 2)
+    assert tuple(gathered_composed.members[0].data.shape) == (2, 2, 4)
+    np.testing.assert_array_equal(
+        gathered_composed.members[0].data,
+        np.take_along_axis(np.asarray(vec.data), idx_raw[..., None], axis=1),
+    )
 
 
 def test_validation_and_unsupported_operations(backend):

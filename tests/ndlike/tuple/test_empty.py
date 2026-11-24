@@ -76,6 +76,7 @@ def test_shaping_and_operators_are_neutral(backend):
     value = backend.cls(())
     results = [
         value.reshape(2, 3),
+        value.reshape([2, 3]),
         value.T,
         value.mT,
         value.squeeze(),
@@ -88,6 +89,7 @@ def test_shaping_and_operators_are_neutral(backend):
         backend.func("sum")(value, axis=3),
     ]
     if backend.name == "torch":
+        idx = backend.array(np.array([0], dtype=np.int64))
         results.extend(
             (
                 value.mH,
@@ -95,11 +97,32 @@ def test_shaping_and_operators_are_neutral(backend):
                 value.movedim(0, 1),
                 value.broadcast_to((2, 3)),
                 value.broadcast_to(2, 3),
+                value.gather(0, idx),
+                value.gather(dim=0, index=value),
+                backend.xp.gather(value, 0, idx),
+                backend.xp.moveaxis(value, 0, 1),
+                backend.xp.concat((value, value)),
                 backend.func("permute")(value, (2, 0, 1)),
             )
         )
+    elif backend.name == "jax":
+        idx = backend.array(np.array([0], dtype=np.int64))
+        results.extend(
+            (
+                value.swapaxes(0, 1),
+                value.take_along_axis(idx),
+                value.take_along_axis(value, axis=0),
+                backend.func("transpose")(value, (2, 0, 1)),
+            )
+        )
     else:
-        results.extend((value.swapaxes(0, 1), backend.func("transpose")(value, (2, 0, 1))))
+        results.extend(
+            (
+                value.reshape((2, 3), copy=True),
+                value.swapaxes(0, 1),
+                backend.func("transpose")(value, (2, 0, 1)),
+            )
+        )
     for result in results:
         assert_empty(result, backend.cls)
     with pytest.raises(ValueError, match="same number"):

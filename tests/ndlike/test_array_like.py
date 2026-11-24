@@ -87,7 +87,9 @@ if TYPE_CHECKING:
         broad_weak: WeakArrayLike[Any, Any, Any, object] = weak  # ty: ignore[invalid-assignment]
         del broad, broad_weak
 
-    def _check_dispatched_method_types(protocol: NumpyLike, implementation: NumpyLikeImplementation) -> None:
+    def _check_dispatched_method_types(
+        protocol: NumpyLike, implementation: NumpyLikeImplementation, order: str
+    ) -> None:
         type Result = NumpyLike[Any]
 
         assert_type(protocol.T, Result)
@@ -98,6 +100,13 @@ if TYPE_CHECKING:
         assert_type(implementation.T, Result)
         assert_type(implementation.mT, Result)
         assert_type(implementation.transpose(), Result)
+        assert_type(implementation.reshape(2, 3), Result)
+        assert_type(implementation.reshape((2, 3)), Result)
+        assert_type(implementation.reshape([2, 3], order="F", copy=True), Result)
+        assert_type(implementation.reshape((2, 3), order=order), Result)
+        assert_type(implementation.squeeze(), Result)
+        assert_type(implementation.squeeze(axis=0), Result)
+        assert_type(implementation.swapaxes(0, 1), Result)
         assert_type(implementation.copy(), Result)
         assert_type(implementation.astype(np.float32), Result)
 
@@ -238,6 +247,11 @@ class TestNumpyLikeImplementationFallbacks:
         assert not isabstract(type(minimal))
         assert isinstance(minimal, NumpyLike)
 
+    def test_numpy_protocol_is_not_widened_with_convenience_methods(self) -> None:
+        members = get_protocol_members(NumpyLike)
+        for name in ("reshape", "squeeze", "swapaxes"):
+            assert name not in members
+
     @pytest.mark.parametrize("native", [False, True])
     def test_dispatched_methods_can_return_another_wrapper_or_native_array(self, native: bool) -> None:
         complete = type(self._make_minimal_subclass())
@@ -253,10 +267,77 @@ class TestNumpyLikeImplementationFallbacks:
             original.T,
             original.mT,
             original.transpose(),
+            original.reshape(1),
+            original.reshape((1,)),
+            original.reshape([1]),
+            original.reshape(1, copy=True),
+            original.squeeze(),
+            original.swapaxes(0, 0),
             original.copy(),
             original.astype(np.float32),
         ):
             assert result is expected
+
+    def test_shaping_methods_dispatch_to_numpy_functions(self) -> None:
+        complete = type(self._make_minimal_subclass())
+        calls: list[tuple[Any, tuple[Any, ...], dict[str, Any]]] = []
+        sentinel = complete()
+
+        def record(self, func, types, args, kwargs):
+            del self, types
+            calls.append((func, args, kwargs))
+            return sentinel
+
+        recording = type("_RecordingArray", (complete,), {"__array_function__": record})
+        array = recording()
+
+        assert array.reshape(2, 3) is sentinel
+        assert calls[-1] == (np.reshape, (array, (2, 3)), {"order": "C"})
+
+        assert array.reshape((2, 3), copy=None) is sentinel
+        assert calls[-1] == (np.reshape, (array, (2, 3)), {"order": "C"})
+
+        assert array.reshape([2, 3], order="F", copy=True) is sentinel
+        assert calls[-1] == (np.reshape, (array, [2, 3]), {"order": "F", "copy": True})
+
+        range_shape = range(2, 4)
+        assert array.reshape(range_shape, copy=False) is sentinel
+        assert calls[-1] == (np.reshape, (array, range_shape), {"order": "C", "copy": False})
+
+        scalar_dim: Any = np.int64(6)
+        assert array.reshape(scalar_dim) is sentinel
+        assert calls[-1] == (np.reshape, (array, scalar_dim), {"order": "C"})
+
+        scalar_array: Any = np.array(6)
+        assert array.reshape(scalar_array) is sentinel
+        assert calls[-1] == (np.reshape, (array, scalar_array), {"order": "C"})
+
+        vector_array: Any = np.array([2, 3])
+        assert array.reshape(vector_array) is sentinel
+        assert calls[-1] == (np.reshape, (array, vector_array), {"order": "C"})
+
+        class _IndexDim:
+            def __index__(self) -> int:
+                return 6
+
+        custom_dim: Any = _IndexDim()
+        assert array.reshape(custom_dim) is sentinel
+        assert calls[-1] == (np.reshape, (array, custom_dim), {"order": "C"})
+
+        assert array.reshape(None) is sentinel
+        assert calls[-1] == (np.reshape, (array, (None,)), {"order": "C"})
+
+        assert array.squeeze() is sentinel
+        assert calls[-1] == (np.squeeze, (array,), {"axis": None})
+
+        assert array.squeeze((0, 2)) is sentinel
+        assert calls[-1] == (np.squeeze, (array,), {"axis": (0, 2)})
+
+        assert array.swapaxes(0, 1) is sentinel
+        assert calls[-1] == (np.swapaxes, (array, 0, 1), {})
+
+        with pytest.raises(TypeError):
+            array.swapaxes(axis1=0, axis2=1)
 
     def test_getitem_raises_not_implemented(self) -> None:
         m = self._make_minimal_subclass()

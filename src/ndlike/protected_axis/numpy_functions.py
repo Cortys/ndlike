@@ -30,6 +30,7 @@ from ndlike.protected_axis._common import (
     normalize_axes,
     normalize_axis,
     normalize_batch_reduction_axes as _normalize_batch_reduction_axes,
+    normalize_reshape_shape,
     prepare_broadcasted_batch,
     protected_shape,
     require_effective_fields,
@@ -355,13 +356,11 @@ def protected_reshape_function(
     if shape is None:
         return NotImplemented
 
-    if isinstance(shape, int):
-        batch_target_shape = (shape,)
-    else:
-        if not isinstance(shape, (tuple, list)):
-            msg = "reshape newshape must be an int, tuple, or list."
-            raise TypeError(msg)
-        batch_target_shape = tuple(1 if dim is None else dim for dim in shape)
+    batch_target_shape = normalize_reshape_shape(
+        shape,
+        array_types=np.ndarray,
+        error_message="reshape newshape must be an int, tuple, or list.",
+    )
 
     order = params.arguments.get("order", "C")
     copy = params.arguments.get("copy", None)

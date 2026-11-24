@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from jax.typing import ArrayLike as JTArrayLike, DTypeLike
 
     from ndlike.jax_like import AnyJaxLike, JaxLike
+    from ndlike.tuple.jax import JaxBroadcastTuple, JaxMember, JaxShapePreservingMember
 
 
 class SupportsJaxFunction(Protocol):
@@ -1010,15 +1011,19 @@ def jax_broadcast_to(array: JTArrayLike, shape: Sequence[int]) -> jax.Array: ...
 
 
 @overload
+def jax_broadcast_to[M: tuple[JaxShapePreservingMember, ...]](
+    array: JaxBroadcastTuple[M], shape: Sequence[int]
+) -> JaxBroadcastTuple[M]: ...
+
+
+@overload
 def jax_broadcast_to[ResultT = jax.Array](
     array: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, shape: Sequence[int]
 ) -> ResultT: ...
 
 
 @jax_function_dispatch("array")
-def jax_broadcast_to[ResultT = jax.Array](
-    array: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, shape: Sequence[int]
-) -> ResultT:
+def jax_broadcast_to(array: AnyJaxLike | JTArrayLike, shape: Sequence[int]) -> object:
     """Broadcast an array to a shape, preserving custom array dispatch.
 
     Args:
@@ -1028,7 +1033,7 @@ def jax_broadcast_to[ResultT = jax.Array](
     Returns:
         The broadcasted array, or the result supplied by a custom override.
     """
-    return cast("ResultT", jnp.broadcast_to(array, shape))  # ty: ignore[invalid-argument-type]
+    return jnp.broadcast_to(array, shape)  # ty: ignore[invalid-argument-type]
 
 
 @overload
@@ -1040,6 +1045,17 @@ def jax_reshape(
     *,
     copy: bool | None = None,
 ) -> jax.Array: ...
+
+
+@overload
+def jax_reshape[M: tuple[JaxShapePreservingMember, ...]](
+    a: JaxBroadcastTuple[M],
+    /,
+    shape: int | Sequence[int],
+    order: str = "C",
+    *,
+    copy: bool | None = None,
+) -> JaxBroadcastTuple[M]: ...
 
 
 @overload
@@ -1065,14 +1081,14 @@ def jax_reshape[ResultT](
 
 
 @jax_function_dispatch("a")
-def jax_reshape[ResultT = jax.Array](
-    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
+def jax_reshape(
+    a: AnyJaxLike | JTArrayLike,
     /,
     shape: int | Sequence[int | None],
     order: str = "C",
     *,
     copy: bool | None = None,
-) -> ResultT:
+) -> object:
     """Return a reshaped version of the array, mirroring ``jax.numpy.reshape``.
 
     Args:
@@ -1084,11 +1100,17 @@ def jax_reshape[ResultT = jax.Array](
     Returns:
         The reshaped array.
     """
-    return cast("ResultT", jnp.reshape(a, shape, order, copy=copy))  # ty: ignore[invalid-argument-type]
+    return jnp.reshape(a, shape, order, copy=copy)  # ty: ignore[invalid-argument-type]
 
 
 @overload
 def jax_transpose(a: JTArrayLike, /, axes: Sequence[int] | None = None) -> jax.Array: ...
+
+
+@overload
+def jax_transpose[M: tuple[JaxShapePreservingMember, ...]](
+    a: JaxBroadcastTuple[M], /, axes: Sequence[int] | None = None
+) -> JaxBroadcastTuple[M]: ...
 
 
 @overload
@@ -1098,9 +1120,7 @@ def jax_transpose[ResultT = jax.Array](
 
 
 @jax_function_dispatch("a")
-def jax_transpose[ResultT = jax.Array](
-    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axes: Sequence[int] | None = None
-) -> ResultT:
+def jax_transpose(a: AnyJaxLike | JTArrayLike, /, axes: Sequence[int] | None = None) -> object:
     """Return a transposed version of the array, mirroring ``jax.numpy.transpose``.
 
     Args:
@@ -1110,11 +1130,17 @@ def jax_transpose[ResultT = jax.Array](
     Returns:
         The transposed array.
     """
-    return cast("ResultT", jnp.transpose(a, axes))  # ty: ignore[invalid-argument-type]
+    return jnp.transpose(a, axes)  # ty: ignore[invalid-argument-type]
 
 
 @overload
 def jax_matrix_transpose(x: JTArrayLike, /) -> jax.Array: ...
+
+
+@overload
+def jax_matrix_transpose[M: tuple[JaxShapePreservingMember, ...]](
+    x: JaxBroadcastTuple[M], /
+) -> JaxBroadcastTuple[M]: ...
 
 
 @overload
@@ -1124,9 +1150,7 @@ def jax_matrix_transpose[ResultT = jax.Array](
 
 
 @jax_function_dispatch("x")
-def jax_matrix_transpose[ResultT = jax.Array](
-    x: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /
-) -> ResultT:
+def jax_matrix_transpose(x: AnyJaxLike | JTArrayLike, /) -> object:
     """Transpose the last two axes of the array, mirroring ``jax.numpy.matrix_transpose``.
 
     Args:
@@ -1135,7 +1159,7 @@ def jax_matrix_transpose[ResultT = jax.Array](
     Returns:
         The array with its last two axes swapped.
     """
-    return cast("ResultT", jnp.matrix_transpose(x))  # ty: ignore[invalid-argument-type]
+    return jnp.matrix_transpose(x)  # ty: ignore[invalid-argument-type]
 
 
 @overload
@@ -1148,6 +1172,15 @@ def jax_moveaxis(
 
 
 @overload
+def jax_moveaxis[M: tuple[JaxShapePreservingMember, ...]](
+    a: JaxBroadcastTuple[M],
+    /,
+    source: int | Sequence[int],
+    destination: int | Sequence[int],
+) -> JaxBroadcastTuple[M]: ...
+
+
+@overload
 def jax_moveaxis[ResultT = jax.Array](
     a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
     /,
@@ -1157,12 +1190,12 @@ def jax_moveaxis[ResultT = jax.Array](
 
 
 @jax_function_dispatch("a")
-def jax_moveaxis[ResultT = jax.Array](
-    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
+def jax_moveaxis(
+    a: AnyJaxLike | JTArrayLike,
     /,
     source: int | Sequence[int],
     destination: int | Sequence[int],
-) -> ResultT:
+) -> object:
     """Move axes of the array to new positions, mirroring ``jax.numpy.moveaxis``.
 
     Args:
@@ -1173,11 +1206,17 @@ def jax_moveaxis[ResultT = jax.Array](
     Returns:
         The array with the axes moved.
     """
-    return cast("ResultT", jnp.moveaxis(a, source, destination))  # ty: ignore[invalid-argument-type]
+    return jnp.moveaxis(a, source, destination)  # ty: ignore[invalid-argument-type]
 
 
 @overload
 def jax_swapaxes(a: JTArrayLike, /, axis1: int, axis2: int) -> jax.Array: ...
+
+
+@overload
+def jax_swapaxes[M: tuple[JaxShapePreservingMember, ...]](
+    a: JaxBroadcastTuple[M], /, axis1: int, axis2: int
+) -> JaxBroadcastTuple[M]: ...
 
 
 @overload
@@ -1187,9 +1226,7 @@ def jax_swapaxes[ResultT = jax.Array](
 
 
 @jax_function_dispatch("a")
-def jax_swapaxes[ResultT = jax.Array](
-    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axis1: int, axis2: int
-) -> ResultT:
+def jax_swapaxes(a: AnyJaxLike | JTArrayLike, /, axis1: int, axis2: int) -> object:
     """Swap two axes of the array, mirroring ``jax.numpy.swapaxes``.
 
     Args:
@@ -1200,11 +1237,17 @@ def jax_swapaxes[ResultT = jax.Array](
     Returns:
         The array with the two axes swapped.
     """
-    return cast("ResultT", jnp.swapaxes(a, axis1, axis2))  # ty: ignore[invalid-argument-type]
+    return jnp.swapaxes(a, axis1, axis2)  # ty: ignore[invalid-argument-type]
 
 
 @overload
 def jax_squeeze(a: JTArrayLike, /, axis: int | Sequence[int] | None = None) -> jax.Array: ...
+
+
+@overload
+def jax_squeeze[M: tuple[JaxShapePreservingMember, ...]](
+    a: JaxBroadcastTuple[M], /, axis: int | Sequence[int] | None = None
+) -> JaxBroadcastTuple[M]: ...
 
 
 @overload
@@ -1214,9 +1257,7 @@ def jax_squeeze[ResultT = jax.Array](
 
 
 @jax_function_dispatch("a")
-def jax_squeeze[ResultT = jax.Array](
-    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axis: int | Sequence[int] | None = None
-) -> ResultT:
+def jax_squeeze(a: AnyJaxLike | JTArrayLike, /, axis: int | Sequence[int] | None = None) -> object:
     """Remove axes of length one, mirroring ``jax.numpy.squeeze``.
 
     Args:
@@ -1226,11 +1267,17 @@ def jax_squeeze[ResultT = jax.Array](
     Returns:
         The squeezed array.
     """
-    return cast("ResultT", jnp.squeeze(a, axis))  # ty: ignore[invalid-argument-type]
+    return jnp.squeeze(a, axis)  # ty: ignore[invalid-argument-type]
 
 
 @overload
 def jax_expand_dims(a: JTArrayLike, /, axis: int | Sequence[int]) -> jax.Array: ...
+
+
+@overload
+def jax_expand_dims[M: tuple[JaxShapePreservingMember, ...]](
+    a: JaxBroadcastTuple[M], /, axis: int | Sequence[int]
+) -> JaxBroadcastTuple[M]: ...
 
 
 @overload
@@ -1240,9 +1287,7 @@ def jax_expand_dims[ResultT = jax.Array](
 
 
 @jax_function_dispatch("a")
-def jax_expand_dims[ResultT = jax.Array](
-    a: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike, /, axis: int | Sequence[int]
-) -> ResultT:
+def jax_expand_dims(a: AnyJaxLike | JTArrayLike, /, axis: int | Sequence[int]) -> object:
     """Insert axes of length one, mirroring ``jax.numpy.expand_dims``.
 
     Args:
@@ -1252,7 +1297,7 @@ def jax_expand_dims[ResultT = jax.Array](
     Returns:
         The expanded array.
     """
-    return cast("ResultT", jnp.expand_dims(a, axis))  # ty: ignore[invalid-argument-type]
+    return jnp.expand_dims(a, axis)  # ty: ignore[invalid-argument-type]
 
 
 @overload
@@ -1262,6 +1307,15 @@ def jax_concatenate(
     axis: int | None = 0,
     dtype: DTypeLike | None = None,
 ) -> jax.Array: ...
+
+
+@overload
+def jax_concatenate(
+    arrays: Sequence[JaxBroadcastTuple[Any]],
+    /,
+    axis: int | None = 0,
+    dtype: DTypeLike | None = None,
+) -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...
 
 
 @overload
@@ -1301,6 +1355,16 @@ def jax_stack(
     out: None = None,
     dtype: DTypeLike | None = None,
 ) -> jax.Array: ...
+
+
+@overload
+def jax_stack(
+    arrays: Sequence[JaxBroadcastTuple[Any]],
+    /,
+    axis: int = 0,
+    out: None = None,
+    dtype: DTypeLike | None = None,
+) -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...
 
 
 @overload
@@ -1347,6 +1411,17 @@ def jax_take_along_axis(
 
 
 @overload
+def jax_take_along_axis[M: tuple[JaxShapePreservingMember, ...]](
+    arr: JaxBroadcastTuple[M],
+    /,
+    indices: JTArrayLike,
+    axis: int | None = -1,
+    mode: str | None = None,
+    fill_value: Any = None,  # noqa: ANN401
+) -> JaxBroadcastTuple[M]: ...
+
+
+@overload
 def jax_take_along_axis[ResultT = jax.Array](
     arr: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
     /,
@@ -1358,14 +1433,14 @@ def jax_take_along_axis[ResultT = jax.Array](
 
 
 @jax_function_dispatch("arr", "indices")
-def jax_take_along_axis[ResultT = jax.Array](
-    arr: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
+def jax_take_along_axis(
+    arr: AnyJaxLike | JTArrayLike,
     /,
-    indices: JaxLike[Any, Any, Any, Any, ResultT, Any, Any] | JTArrayLike,
+    indices: AnyJaxLike | JTArrayLike,
     axis: int | None = -1,
     mode: str | None = None,
     fill_value: Any = None,
-) -> ResultT:
+) -> object:
     """Take values along an axis, mirroring ``jax.numpy.take_along_axis``.
 
     Args:
@@ -1378,7 +1453,7 @@ def jax_take_along_axis[ResultT = jax.Array](
     Returns:
         The gathered array.
     """
-    return cast("ResultT", jnp.take_along_axis(arr, indices, axis, mode=mode, fill_value=fill_value))  # ty: ignore[invalid-argument-type]
+    return jnp.take_along_axis(arr, indices, axis, mode=mode, fill_value=fill_value)  # ty: ignore[invalid-argument-type]
 
 
 @overload

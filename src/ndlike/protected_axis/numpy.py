@@ -517,18 +517,3 @@ class NumpyAxisProtected[
         kwargs: dict[str, object],
     ) -> object:
         return numpy_function(func, types, args, kwargs)
-
-    def reshape(self, *shape: int | tuple[int, ...], order: str = "C", copy: bool | None = None) -> ShapeResultT:
-        """Return a copy with reshaped protected values."""
-        if len(shape) == 1 and isinstance(shape[0], tuple):
-            shape = shape[0]
-
-        return np.reshape(self, shape, order=order, copy=copy)  # ty:ignore[no-matching-overload]
-
-    def swapaxes(self, axis1: int, axis2: int, /) -> ShapeResultT:
-        """Return a copy with two batch axes swapped."""
-        return np.swapaxes(self, axis1, axis2)  # ty: ignore[invalid-explicit-return]
-
-    def squeeze(self, axis: int | tuple[int, ...] | None = None) -> ShapeResultT:
-        """Return a copy with singleton batch axes removed."""
-        return np.squeeze(self, axis=axis)  # ty: ignore[invalid-explicit-return]

@@ -8,14 +8,15 @@ from typing import TYPE_CHECKING, Any, Self, cast, overload
 import numpy as np
 import torch
 
-from ndlike.torch_like import TorchLikeImplementation, _broadcast_to_args, to_torch_like
+from ndlike.torch_like import AnyTorchLike, TorchLikeImplementation, to_torch_like
 from ndlike.tuple._common import BroadcastTuple, tuple_function
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from types import ModuleType
 
-    from ndlike.torch_like import AnyTorchLike
+    from ndlike.array_like import ToIndices
+    from ndlike.tuple._common import PreservingMembers
 
 
 # Only functions with a fixed, single-array result can operate without members.
@@ -26,11 +27,14 @@ _EMPTY_ARRAY_FUNCTIONS = frozenset(
         torch.permute,
         torch.swapaxes,
         torch.movedim,
+        torch.moveaxis,
         torch.squeeze,
         torch.unsqueeze,
         torch.broadcast_to,
+        torch.gather,
         torch.stack,
         torch.cat,
+        torch.concat,
         torch.concatenate,
         torch.clone,
         torch.conj,
@@ -71,14 +75,17 @@ _EMPTY_ARRAY_FUNCTIONS = frozenset(
 )
 
 
-class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
+type TorchMember = AnyTorchLike | torch.Tensor
+
+
+class TorchBroadcastTuple[Members: tuple[TorchMember, ...]](
     BroadcastTuple[Members],
     TorchLikeImplementation[
         "TorchBroadcastTuple[Members]",
         object,
         "TorchBroadcastTuple[Members]",
         object,
-        "TorchBroadcastTuple[Members]",
+        "TorchBroadcastTuple[tuple[TorchMember, ...]]",
         "TorchBroadcastTuple[tuple[Any, ...]]",
     ],
 ):
@@ -103,7 +110,7 @@ class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
         return self._map_members(lambda member: to_torch_like(member, dtype, device=device, copy=copy))
 
     def __post_init__(self) -> None:
-        """Require native or dispatched members so shaping cannot coerce representations."""
+        """Require each member to be a native array or support backend dispatch."""
         super().__post_init__()
         for member in self.members:
             if not isinstance(member, torch.Tensor) and not callable(getattr(type(member), "__torch_function__", None)):
@@ -111,8 +118,8 @@ class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
                 raise TypeError(msg)
 
     @staticmethod
-    def _broadcast_member[V: AnyTorchLike | torch.Tensor](member: V, shape: tuple[int, ...]) -> V:
-        return cast("V", torch.broadcast_to(cast("Any", member), shape))
+    def _broadcast_member(member: TorchMember, shape: tuple[int, ...]) -> TorchMember:
+        return torch.broadcast_to(cast("Any", member), shape)
 
     @staticmethod
     def _is_scalar_integer(value: object) -> bool:
@@ -133,17 +140,17 @@ class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
         return namespace(api_version=api_version)
 
     @property
-    def mT(self) -> Self:  # noqa: N802
+    def mT(self) -> TorchBroadcastTuple[tuple[TorchMember, ...]]:  # noqa: N802
         """Swap the last two logical batch axes."""
         if self.members and self.ndim < 2:
             msg = "mT requires at least two dimensions."
             raise ValueError(msg)
-        return cast("Self", self.transpose(-2, -1))
+        return self.transpose(-2, -1)
 
     @property
-    def mH(self) -> Self:  # noqa: N802
+    def mH(self) -> TorchBroadcastTuple[tuple[TorchMember, ...]]:  # noqa: N802
         """Conjugate and transpose the last two logical batch axes."""
-        return cast("Self", torch.adjoint(cast("Any", self)))
+        return cast("TorchBroadcastTuple[tuple[TorchMember, ...]]", torch.adjoint(cast("Any", self)))
 
     def numpy(self, *, force: bool = False) -> np.ndarray:
         """Reject conversion of multiple representations into one array."""
@@ -158,42 +165,119 @@ class TorchBroadcastTuple[Members: tuple[AnyTorchLike | torch.Tensor, ...]](
         """Detach each member without expanding compact storage."""
         return self._map_members(lambda member: member.detach())
 
-    def reshape(self, *shape: int | tuple[int, ...]) -> Self:
-        """Reshape the common logical batch."""
-        target = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
-        return cast("Self", torch.reshape(cast("Any", self), cast("Any", target)))
-
-    def squeeze(self, dim: int | tuple[int, ...] | list[int] | None = None) -> Self:
-        """Remove singleton logical batch dimensions."""
-        return (
-            cast("Self", torch.squeeze(cast("Any", self), dim=dim))
-            if dim is not None
-            else cast("Self", torch.squeeze(cast("Any", self)))
-        )
-
-    def unsqueeze(self, dim: int) -> Self:
-        """Insert a singleton logical batch dimension at ``dim``."""
-        return cast("Self", torch.unsqueeze(cast("Any", self), dim))
+    @overload
+    def gather(self: PreservingMembers, dim: int, index: torch.Tensor) -> TorchBroadcastTuple[Members]: ...
 
     @overload
-    def movedim(self, source: int, destination: int) -> Self: ...
+    def gather(
+        self, dim: int, index: torch.Tensor | TorchBroadcastTuple[Any]
+    ) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
 
-    @overload
-    def movedim(self, source: Sequence[int], destination: Sequence[int]) -> Self: ...
+    def gather(self, dim: int, index: torch.Tensor | TorchBroadcastTuple[Any]) -> TorchBroadcastTuple[Any]:
+        """Gather values along a logical batch dimension."""
+        return cast("TorchBroadcastTuple[Any]", torch.gather(cast("Any", self), dim, cast("Any", index)))
 
-    def movedim(self, source: int | Sequence[int], destination: int | Sequence[int]) -> Self:
-        """Move logical batch dimensions from ``source`` to ``destination``."""
-        return torch.movedim(self, source, destination)  # ty: ignore[no-matching-overload]
+    if TYPE_CHECKING:
 
-    @overload
-    def broadcast_to(self, size: Sequence[int]) -> Self: ...
+        def _ndlike_tuple_owner(self) -> TorchBroadcastTuple[Members]:
+            """Identify the container rebuilt by memberwise shaping."""
+            ...
 
-    @overload
-    def broadcast_to(self, dim: int, /, *dims: int) -> Self: ...
+        @overload
+        def __getitem__(self: PreservingMembers, index: ToIndices, /) -> TorchBroadcastTuple[Members]: ...
+        @overload
+        def __getitem__(self, index: ToIndices, /) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
+        def __getitem__(self, index: ToIndices, /) -> TorchBroadcastTuple[Any]:
+            """Index the logical batch."""
+            ...
 
-    def broadcast_to(self, *args: int | Sequence[int], **kwargs: Sequence[int]) -> Self:
-        """Broadcast the common logical batch to ``size``."""
-        return torch.broadcast_to(self, *_broadcast_to_args(args), **kwargs)  # ty: ignore[invalid-explicit-return, invalid-argument-type]
+        @overload
+        def __iter__(self: PreservingMembers) -> Iterator[TorchBroadcastTuple[Members]]: ...
+        @overload
+        def __iter__(self) -> Iterator[TorchBroadcastTuple[tuple[TorchMember, ...]]]: ...
+        def __iter__(self) -> Iterator[TorchBroadcastTuple[Any]]:
+            """Iterate over the logical batch."""
+            ...
+
+        @overload
+        def reshape(
+            self: PreservingMembers, *shape: int | tuple[int, ...] | list[int]
+        ) -> TorchBroadcastTuple[Members]: ...
+        @overload
+        def reshape(
+            self, *shape: int | tuple[int, ...] | list[int]
+        ) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
+        def reshape(self, *shape: int | tuple[int, ...] | list[int]) -> TorchBroadcastTuple[Any]:
+            """Reshape the logical batch."""
+            ...
+
+        @overload
+        def transpose(self: PreservingMembers, dim0: int, dim1: int) -> TorchBroadcastTuple[Members]: ...
+        @overload
+        def transpose(self, dim0: int, dim1: int) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
+        def transpose(self, dim0: int, dim1: int) -> TorchBroadcastTuple[Any]:
+            """Transpose the logical batch axes."""
+            ...
+
+        @overload
+        def permute(
+            self: PreservingMembers, *dims: torch.Size | int | tuple[int] | list[int]
+        ) -> TorchBroadcastTuple[Members]: ...
+        @overload
+        def permute(
+            self, *dims: torch.Size | int | tuple[int] | list[int]
+        ) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
+        def permute(self, *dims: torch.Size | int | tuple[int] | list[int]) -> TorchBroadcastTuple[Any]:
+            """Permute the logical batch axes."""
+            ...
+
+        @overload
+        def squeeze(
+            self: PreservingMembers, dim: int | tuple[int, ...] | list[int] | None = None
+        ) -> TorchBroadcastTuple[Members]: ...
+        @overload
+        def squeeze(
+            self, dim: int | tuple[int, ...] | list[int] | None = None
+        ) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
+        def squeeze(self, dim: int | tuple[int, ...] | list[int] | None = None) -> TorchBroadcastTuple[Any]:
+            """Remove singleton logical axes."""
+            ...
+
+        @overload
+        def unsqueeze(self: PreservingMembers, dim: int) -> TorchBroadcastTuple[Members]: ...
+        @overload
+        def unsqueeze(self, dim: int) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
+        def unsqueeze(self, dim: int) -> TorchBroadcastTuple[Any]:
+            """Insert a singleton logical axis."""
+            ...
+
+        @overload
+        def movedim(self: PreservingMembers, source: int, destination: int) -> TorchBroadcastTuple[Members]: ...
+        @overload
+        def movedim(
+            self: PreservingMembers, source: Sequence[int], destination: Sequence[int]
+        ) -> TorchBroadcastTuple[Members]: ...
+        @overload
+        def movedim(self, source: int, destination: int) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
+        @overload
+        def movedim(
+            self, source: Sequence[int], destination: Sequence[int]
+        ) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
+        def movedim(self, source: int | Sequence[int], destination: int | Sequence[int]) -> TorchBroadcastTuple[Any]:
+            """Move logical batch axes."""
+            ...
+
+        @overload
+        def broadcast_to(self: PreservingMembers, size: Sequence[int]) -> TorchBroadcastTuple[Members]: ...
+        @overload
+        def broadcast_to(self: PreservingMembers, dim: int, /, *dims: int) -> TorchBroadcastTuple[Members]: ...
+        @overload
+        def broadcast_to(self, size: Sequence[int]) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
+        @overload
+        def broadcast_to(self, dim: int, /, *dims: int) -> TorchBroadcastTuple[tuple[TorchMember, ...]]: ...
+        def broadcast_to(self, *args: int | Sequence[int], **kwargs: Sequence[int]) -> TorchBroadcastTuple[Any]:
+            """Broadcast the logical batch."""
+            ...
 
     @classmethod
     def __torch_function__(

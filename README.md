@@ -1,156 +1,41 @@
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Cortys/ndlike/master/docs/source/_static/logo/ndlike-logo-horizontal-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/source/_static/logo/ndlike-logo-horizontal-light.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Cortys/ndlike/master/docs/source/_static/logo/ndlike-logo-horizontal-light.svg">
     <img src="https://raw.githubusercontent.com/Cortys/ndlike/master/docs/source/_static/logo/ndlike-logo-horizontal-light.svg" alt="ndlike" width="320" />
   </picture>
 </div>
 
-NumPy arrays, JAX arrays, and PyTorch tensors provide similar primitives for
-indexing, reshaping, stacking, and numerical operations. `ndlike` provides tools
-to build wrappers around these types that behave like the underlying arrays,
-but whose elements represent custom composite values—such as vectors or
-distributions—instead of individual numbers.
+`ndlike` helps you build custom array-like types on top of NumPy, JAX, and
+PyTorch—where each element can be a composite value (such as a vector,
+interval, or probability distribution) rather than a single number:
 
-Protocols and reusable base classes handle array interfaces and backend function
-dispatch. Protected axes distinguish collection dimensions from each element's
-internal dimensions, so indexing, reshaping, or stacking a collection preserves
-the structure of its elements.
+- **Protected-axis arrays** (`NumpyAxisProtected`, `JaxAxisProtected`, `TorchAxisProtected`): treat trailing axes as each element's internal structure so indexing, reshaping, stacking, and opt-in math act on the batch dimensions.
+- **Broadcast tuples** (`NumpyBroadcastTuple`, `JaxBroadcastTuple`, `TorchBroadcastTuple`): bundle heterogeneous arrays or custom array-likes under one shared broadcast shape.
+- **JAX function dispatch & pytrees** (`ndlike.jax_functions`, `jax_function_dispatch`, `jax_tree_map`): bring `__array_function__`-style dispatch and opaque pytree mapping to JAX.
+- **Array protocols & conversions** (`WeakArrayLike`, `ArrayLike`, `NumpyLike`, `JaxLike`, `TorchLike`, `to_*_like`): structural protocols, reusable implementation bases, and structure-preserving backend conversions.
 
-## Installation
+## Install
 
-Requires Python 3.13 or newer.
+Requires Python 3.13+.
 
-```bash
+```sh
 pip install ndlike
 pip install 'ndlike[torch]'
 pip install 'ndlike[jax]'
+# or with uv
+uv add ndlike
 ```
 
-NumPy and flextype are core dependencies. Torch and JAX are optional and are
-never imported by the backend-independent modules. Import backend modules explicitly.
+NumPy and `flextype` are core dependencies. PyTorch and JAX are optional and are
+never imported unless you explicitly import their backend modules.
 
-## Array protocols and base classes
+## Protected-Axis Arrays
 
-`ndlike.array_like.ArrayLike` describes indexing, shape, and metadata rather than
-just convertibility to an array (as in `numpy.typing.ArrayLike`). It does not
-require the full numerical Array API. `WeakArrayLike` covers the shared
-interface without NumPy/JAX's integer `size` property, since Torch uses a method.
-
-The array protocols and implementation bases use these positional type parameters:
-
-| Parameter | Default | Contract |
-| --- | --- | --- |
-| `OwnerT` | Broad corresponding array protocol | Owner, bounded to the corresponding protocol |
-| `OpValueT` | `OwnerT` | Accepted operation operands |
-| `OpResultT` | `OwnerT` | Arithmetic and reduction results |
-| `SetValueT` | `Never` | Assignment values in addition to `Self` |
-| `ShapeResultT` | `OwnerT` | Shape, indexing, and iteration-element results |
-| `CompResultT` | Backend boolean array type | Comparison results |
-| `SetResultT` | `OwnerT` | Functional update results |
-
-Explicit result arguments replace the default; they are not unioned with the owner.
-Copies (`copy`, `clone`, and `jax_copy`) return `OwnerT`. Indexing returns
-`ShapeResultT`, and iteration yields elements of that type.
-The backend-neutral comparison default is `WeakArrayLike`. JAX and Torch array
-annotations do not encode boolean dtype. `WeakArrayLike` and `ArrayLike` require
-indexing, shape, and metadata interfaces without numerical operators, so they also
-cover boolean arrays that do not support all numerical operators. Operator requirements belong to `NumpyLike`, `JaxLike`,
-and `TorchLike`.
-
-For example, `JaxLike[MyArray, MyArray | float]` accepts its own type and floats
-as operation operands while returning `MyArray` by default. Additional assignment
-inputs occupy the fourth slot. `JaxLike[MyArray, MyArray, MyArray, float]` accepts
-`Self | float` for assignment and `.at` updates. `__setitem__` returns `None`;
-`.at[index].set(...)` and the arithmetic update methods return `SetResultT`, while
-`.at[index].get()` returns `ShapeResultT`. The helper protocols expose these as
-`JaxIndexUpdateHelper[ValueT, ResultT, ShapeResultT = ResultT]` and
-`JaxIndexUpdateRef[ValueT, ResultT, ShapeResultT = ResultT]`.
-Both helper protocols are final: custom helpers implement their interfaces structurally.
-
-An extensible base can forward its owner with
-`class Vector[T: "Vector"](JaxLikeImplementation[T]): ...`; a leaf specializes it
-with `class ConcreteVector(Vector["ConcreteVector"]): ...`. Implementations must
-fulfill the declared result contracts. The owner parameter does not automatically
-make `self` assignable to `T` inside the generic base.
-
-Arguments are positional; trailing defaults may be omitted. Existing single type
-arguments now mean the owner, not an extra assignment value or storage type.
-Conversion protocols retain their single additional-assignment parameter.
-The `NumpyAxisProtected`, `JaxAxisProtected`, and `TorchAxisProtected` bases use
-the same seven parameters and defaults as their corresponding `*Like` types;
-the former storage parameter is removed. For example,
-`class Vector(JaxAxisProtected["Vector", "Vector | float"]): ...` preserves
-`Vector` results while accepting scalar operands. Native contracts can be
-written as `NumpyLike[np.ndarray]`, `JaxLike[jax.Array]`, or
-`TorchLike[torch.Tensor]`. Unspecialized backend protocols use broad owner and
-operand defaults, so native arrays need not match that particular specialization.
-
-Backend-specific APIs build on these protocols:
-
-| Module | Protocol | Conversion helper | Conversion hook |
-| --- | --- | --- | --- |
-| `ndlike.array_like` | `NumpyLike` | `to_numpy_like` | `__array_like__` |
-| `ndlike.torch_like` | `TorchLike` | `to_torch_like` | `__torch_like__` |
-| `ndlike.jax_like` | `JaxLike` | `to_jax_like` | `__jax_like__` |
-
-Each module also provides matching `Implementation` and `Convertible` classes,
-such as `NumpyLikeImplementation` and `NumpyLikeConvertible`.
-
-Use the array protocols to type inputs, or subclass an implementation base to
-reuse convenience methods while supplying your representation's metadata and
-operation-dispatch hooks. NumPy uses `__array_function__` / `__array_ufunc__`,
-Torch uses `__torch_function__`, and ndlike supplies `__jax_function__` for JAX.
-
-Conversion helpers call the conversion hook when an input satisfies the matching
-convertible protocol: the core array interface plus the hook, not the hook alone.
-This lets custom types preserve their structure instead of becoming raw arrays.
-Otherwise, the helpers fall back to `numpy.asanyarray`, `torch.as_tensor`, and
-`jax.numpy.asarray`, respectively. NumPy retains `__array_like__` for backward
-compatibility and consistency with NumPy's `__array__`.
-
-## Broadcast tuples
-
-`ndlike.tuple` provides `NumpyBroadcastTuple`, `JaxBroadcastTuple`, and
-`TorchBroadcastTuple` in its `numpy`, `jax`, and `torch` submodules. These are
-heterogeneous collections with one logical array shape:
-
-```python
-import numpy as np
-
-from ndlike.tuple.numpy import NumpyBroadcastTuple
-
-parts = NumpyBroadcastTuple((np.ones((2, 1)), np.arange(3), np.array(7)))
-assert parts.shape == (2, 3)
-```
-
-`.members` accesses the stored representations. Indexing, iteration, and `len`
-operate on the logical batch. Basic indexing preserves compact broadcasts;
-advanced indexing and structural functions expand members to the common shape
-before operating.
-
-Members must be native arrays of the selected backend or implement that backend's
-function dispatch protocol.
-
-The `__array_like__`, `__jax_like__`, and `__torch_like__` hooks convert members
-individually without expanding their shapes. JAX and Torch are imported on demand;
-conversion to the same backend returns the original tuple unless a `dtype`,
-`device`, or `copy=True` is requested.
-
-The generic parameter specifies the entire member tuple:
-`JaxBroadcastTuple[tuple[Game, Value]]` has `members: tuple[Game, Value]`, so
-`members[0]` is typed as `Game` and `members[1]` as `Value`. Construction infers
-these types, and shaping preserves them. Use `JaxBroadcastTuple[tuple[Game, ...]]`
-for arbitrarily many games, or `JaxBroadcastTuple[tuple[Game]]` for exactly one.
-NumPy and Torch use the same notation. Each backend bounds the member tuple to
-its native arrays or matching array-like protocol; NumPy also accepts its native
-array scalars.
-
-## Protected axes
-
-Protected-axis base classes give structured objects array-like behavior over
-their batch dimensions while preserving trailing internal dimensions. For
-example, a batch of six 3D vectors should have logical shape `(6,)`, not `(6, 3)`:
+When you store a batch of six 3D vectors in a `(6, 3)` array, its logical shape
+is `(6,)`, not `(6, 3)`. Subclassing `NumpyAxisProtected` (or its JAX/Torch
+counterpart) lets you declare trailing *protected axes* so array operations act
+only on the batch dimensions while preserving every element's internal shape:
 
 ```python
 from dataclasses import dataclass
@@ -181,173 +66,386 @@ assert isinstance(stacked, Vectors)
 assert stacked.shape == (2, 6)
 ```
 
-`protected_axes` maps field names to the number of trailing axes to preserve.
-Multiple fields can have different internal shapes while sharing the same batch
-shape; indexing and supported shape operations update them together. Dataclasses
-work out of the box; other classes must override `with_protected_values` to
-reconstruct results.
+`protected_axes` maps each field name to the number of trailing axes belonging
+to one element. Dataclasses work out of the box; non-dataclasses only need to
+override `with_protected_values` to reconstruct results.
 
-`broadcasted_batch` names protected fields that may store a broadcastable batch
-shape instead of the full batch. For example, scalar weights can be shared across
-every vector without storing a weight per vector. Unmarked fields must share the
-object's batch shape; marked fields must broadcast to it. If all fields are
-marked, their combined broadcast determines the shape—for example, batch shapes
-`(2, 1)` and `(3,)` give `(2, 3)`. Protected trailing axes are excluded from this
-broadcasting. Indexing and shape operations preserve compact storage when possible
-and expand it when needed.
+### Opt-in math and reductions
 
-Numerical operations are opt-in: use `permitted_functions` (for example,
-`{np.mean}`) and, for NumPy ufuncs, `permitted_ufuncs` (for example,
-`{np.add: ["__call__", "reduce"]}`). Supported reductions operate on batch axes,
-leaving internal axes intact.
-
-The corresponding backend classes are `TorchAxisProtected` in
-`ndlike.protected_axis.torch` and `JaxAxisProtected` in
-`ndlike.protected_axis.jax`.
-
-For all three backends, `protected_axes` and `broadcasted_batch` accumulate across base classes.
-Subclasses only need to declare additions.
+Numerical operations are opt-in so domain invariants cannot be broken silently.
+Allow specific functions via `permitted_functions` and (for NumPy) ufuncs via
+`permitted_ufuncs`. Permitted reductions automatically reduce only the batch
+axes, leaving protected trailing axes intact:
 
 ```python
-import jax
-from ndlike.protected_axis.jax import JaxAxisProtected
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, ClassVar
+
+import numpy as np
+
+from ndlike.protected_axis.numpy import NumpyAxisProtected
 
 
 @dataclass(frozen=True)
-class Vectors(JaxAxisProtected):
-    vectors: jax.Array
+class Vectors(NumpyAxisProtected["Vectors", "Vectors | float"]):
+    array: np.ndarray
+    protected_axes: ClassVar[dict[str, int]] = {"array": 1}
+    permitted_functions: ClassVar[set[Callable[..., Any]]] = {np.mean, np.sum}
+    permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {
+        np.add: ["__call__", "reduce"],
+    }
+
+
+v = Vectors(np.arange(24.0).reshape(2, 3, 4))
+
+shifted = v + 1.0
+assert isinstance(shifted, Vectors) and shifted.shape == (2, 3)
+
+avg = np.mean(v)                      # reduces batch axes (0, 1) only
+assert isinstance(avg, Vectors)
+assert avg.shape == ()
+assert avg.protected_shape == (4,)
+```
+
+### Multiple fields, broadcasting, and inheritance
+
+A type can protect multiple fields with different internal shapes while sharing
+one batch shape. Marking a field in `broadcasted_batch` lets it store a compact,
+broadcastable batch shape (for instance, one shared scalar weight across every
+vector) that stays compact across basic indexing and expands only when needed:
+
+```python
+from dataclasses import dataclass, field
+from typing import ClassVar
+
+import numpy as np
+
+from ndlike.protected_axis.numpy import NumpyAxisProtected
+
+
+@dataclass(frozen=True)
+class Vectors(NumpyAxisProtected):
+    vectors: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"vectors": 1}
 
 
 @dataclass(frozen=True)
 class WeightedVectors(Vectors):
-    weights: jax.Array
+    weights: np.ndarray
     protected_axes: ClassVar[dict[str, int]] = {"weights": 0}
     broadcasted_batch: ClassVar[set[str]] = {"weights"}
-```
-
-`WeightedVectors.protected_axes` is `{"vectors": 1, "weights": 0}`. Its weights
-may have a batch shape broadcastable to the vectors' batch shape. Further
-subclasses inherit both declarations, including through abstract bases. Layouts
-merge from left to right across bases.
-
-Inherited fields and broadcast markers cannot be removed by omitting them or
-declaring empty containers. A subclass can override an inherited axis count by
-declaring that field locally in `protected_axes`. Conflicting counts from
-multiple bases must also be resolved with a local declaration.
-Overrides change the batch/protected-axis split, so the subclass must ensure its
-fields and inherited methods remain compatible with the new layout.
-
-### Fields owned by initialization
-
-A dataclass subclass can redeclare an inherited protected field with
-`field(init=False)`. The field remains in `protected_axes`, but
-`protected_values()` and operations in NumPy, Torch, and ndlike's JAX wrappers
-use only the effective layout, excluding these fields. They transform only independent fields;
-`with_protected_values` receives those results and normal dataclass initialization
-recreates the excluded fields through defaults, factories, or `__post_init__`.
-Consequently, `x.with_protected_values(x.protected_values())` reconstructs a copy
-without passing any `init=False` fields to the constructor. Excluded fields remain
-accessible as attributes and through `protected_value()` when selected as primary.
-For example, a specialized weighted representation can fix its weights:
-
-```python
-from dataclasses import field
-import jax.numpy as jnp
 
 
 @dataclass(frozen=True)
 class UniformVectors(WeightedVectors):
-    weights: jax.Array = field(init=False, default_factory=lambda: jnp.array(1.0))
+    weights: np.ndarray = field(init=False, default_factory=lambda: np.array(1.0))
+
+
+wv = WeightedVectors(vectors=np.ones((2, 3, 4)), weights=np.array(0.5))
+assert wv.shape == (2, 3)
+assert wv[0].weights.shape == ()      # compact broadcast preserved
+
+uv = UniformVectors(vectors=np.ones((2, 3, 4)))
+assert uv.reshape(6).shape == (6,)    # init=False field rebuilt on construction
 ```
 
-The private `_effective_protected_axes` dictionary is resolved on first use from
-the concrete class's completed dataclass fields and cached on that class. This
-also handles frozen/slotted subclasses and overrides that restore `init=True`.
-Non-dataclasses retain every declared protected field. Treat class layouts and
-dataclass field definitions as fixed after first use.
+- **Layout inheritance:** `protected_axes` and `broadcasted_batch` accumulate
+  left-to-right across base classes (so `WeightedVectors.protected_axes` is
+  `{"vectors": 1, "weights": 0}`). Inherited fields and broadcast markers cannot
+  be removed by omitting them; redeclaring a field locally overrides its axis
+  count (and resolves conflicts across multiple bases).
+- **All-broadcasted layouts:** Unmarked fields share the object's batch shape;
+  if *every* field is in `broadcasted_batch`, their broadcasted batch shapes
+  determine the logical shape (for example, `(2, 1)` and `(3,)` give `(2, 3)`).
+- **Derived `init=False` fields:** Redeclaring an inherited protected field with
+  `field(init=False)` keeps it accessible as an attribute while excluding it
+  from operational transforms—operations transform only independent fields and
+  reconstruct the subclass through normal dataclass initialization.
 
-### Preparing assignments
+### PyTorch and JAX backends
 
-NumPy and Torch protected types can override
-`_prepare_assignment_value(self, value)` to convert an incoming value to the
-destination's metadata convention or raise if incompatible. The default returns
-the value unchanged. Preparation runs before field extraction and protected-shape
-validation; return the original value or a converted replacement without mutating
-the supplied object. Destination metadata is retained. For example, a type with
-coordinate-frame metadata can return `value.to_frame(self.frame)`.
-
-JAX uses `_prepare_assignment_value(self, value, *, method)` for `.at[index]`
-updates. Import `JaxAtMethod` from `ndlike.protected_axis.jax` to annotate
-`permitted_at_methods: ClassVar[set[JaxAtMethod]] = {"set"}`. This enables replacement
-by default; add names such as `"add"` or `"max"` to opt into other indexed updates,
-or use an empty set to disable updates. These permissions are independent of
-`permitted_functions` and are checked before preparation. The hook receives the
-update method, and the prepared operand is applied using native fieldwise scatter
-semantics. `.at[index].get()` follows ordinary indexing.
-
-## JAX function dispatch
-
-JAX has no native equivalent of NumPy's `__array_function__`. For custom objects,
-use wrappers from `ndlike.jax_functions`, such as `jax_reshape`, `jax_stack`, and
-`jax_mean`, instead of the corresponding `jax.numpy` functions. They dispatch to
-`__jax_function__` on custom types and call JAX normally for native arrays.
-`jax_function_dispatch` lets you add the same dispatch behavior to your own
-functions. `JaxLikeImplementation` also provides dataclass-based pytree support
-for JAX transformations such as `jax.jit`, `jax.vmap`, and `jax.grad`, and
-arithmetic operators that dispatch through the same wrappers.
-
-### Explicit JAX representation fields
-
-General `JaxLikeImplementation` subclasses must declare their dynamic fields:
+Use `TorchAxisProtected` (`ndlike.protected_axis.torch`) and `JaxAxisProtected`
+(`ndlike.protected_axis.jax`) in the same way. `JaxAxisProtected` registers as a
+JAX pytree automatically and supports functional `.at[index]` updates:
 
 ```python
-pytree_children: ClassVar[tuple[str, ...]] = ("array",)
+from dataclasses import dataclass
+from typing import ClassVar
+
+import jax
+import jax.numpy as jnp
+
+from ndlike.jax_functions import jax_stack
+from ndlike.protected_axis.jax import JaxAtMethod, JaxAxisProtected
+
+
+@dataclass(frozen=True)
+class JaxVectors(JaxAxisProtected["JaxVectors"]):
+    array: jax.Array
+    protected_axes: ClassVar[dict[str, int]] = {"array": 1}
+    permitted_at_methods: ClassVar[set[JaxAtMethod]] = {"set", "add"}
+
+
+v = JaxVectors(jnp.zeros((4, 3)))
+updated = v.at[0].set(JaxVectors(jnp.ones(3)))
+stacked = jax.jit(lambda a, b: jax_stack((a, b)))(v, updated)
+assert stacked.shape == (2, 4)
+assert stacked.protected_shape == (3,)
 ```
 
-The declaration is inherited and its order is preserved. Extend it explicitly
-when a subclass adds dynamic fields. Selection never depends on a field's value,
-shape, or whether it currently contains `None`. `JaxAxisProtected` declares its
-protected fields automatically, using `protected_axes` order.
+- **Indexed update permissions (JAX):** `permitted_at_methods` defaults to
+  `{"set"}`. Add names such as `"add"` or `"max"` to opt into other scatter
+  updates, or set it to `set()` to disable updates. `.at[index].get()` follows
+  ordinary indexing.
+- **Preparing assignments:** Override `_prepare_assignment_value(self, value)`
+  on NumPy/Torch protected types—or `_prepare_assignment_value(self, value, *, method)`
+  on JAX—to normalize or validate incoming values (for example, converting a
+  value into `self`'s coordinate frame) without mutating the supplied object.
+  Destination metadata is preserved.
 
-Default pytree traversal requires JAX-backed dynamic array fields. NumPy arrays
-are rejected, including numeric arrays and arrays nested in child containers;
-array-valued static metadata is also unsupported. This prevents silent backend
-conversion or freezing. Mixed representations support eager operations, but
-cannot be traversed by `jit`, `grad`, `vmap`, or native tree utilities with this
-default layout.
+## Broadcast Tuples
 
-### Mapping arrays versus their components
-
-Native `jax.tree.map` traverses registered representations structurally. It does
-not invoke the outer wrapper's operators or preserve its semantic invariants.
-Use `jax_tree_map` when the function should receive whole custom arrays:
+`NumpyBroadcastTuple`, `JaxBroadcastTuple`, and `TorchBroadcastTuple` (in
+`ndlike.tuple.numpy`, `ndlike.tuple.jax`, and `ndlike.tuple.torch`) combine
+heterogeneous arrays or custom array-likes into a single object with one logical
+broadcast shape:
 
 ```python
+import numpy as np
+
+from ndlike.tuple.numpy import NumpyBroadcastTuple
+
+parts = NumpyBroadcastTuple((np.ones((2, 1)), np.arange(3), np.array(7)))
+assert parts.shape == (2, 3)
+assert len(parts) == 2
+
+first_row = parts[0]                  # basic indexing preserves compact broadcasts
+assert first_row.shape == (3,)
+assert first_row.members[2].shape == ()
+
+doubled = parts * 2                   # operations forward to each member
+assert doubled.shape == (2, 3)
+
+stacked = np.stack([parts, parts])    # structural ops expand to the common shape
+assert stacked.shape == (2, 2, 3)
+```
+
+- Use `.members` to access the stored tuple directly; indexing, `len`, and
+  iteration operate on the logical batch.
+- Members must be native arrays of the chosen backend (including NumPy scalars)
+  or implement that backend's function dispatch protocol.
+- Backend conversion hooks (`__array_like__`, `__jax_like__`, `__torch_like__`)
+  convert members individually without expanding compact broadcasts, loading
+  JAX/Torch on demand. Same-backend conversion is a no-op unless `dtype`,
+  `device`, or `copy=True` is passed.
+- The generic parameter types the full member tuple—e.g.
+  `JaxBroadcastTuple[tuple[Game, Value]]` gives `members: tuple[Game, Value]`,
+  while `JaxBroadcastTuple[tuple[Game, ...]]` allows arbitrarily many members.
+
+## JAX Function Dispatch & Pytrees
+
+JAX has no native equivalent of NumPy's `__array_function__`. To let custom
+objects participate in JAX array operations, `ndlike.jax_functions` provides
+thin wrappers (`jax_reshape`, `jax_stack`, `jax_mean`, `jax_add`, …) that
+dispatch to `__jax_function__` on custom types and call `jax.numpy` normally for
+native arrays.
+
+You can give your own functions the same dispatch behavior with
+`@jax_function_dispatch`:
+
+```python
+import jax
+import jax.numpy as jnp
+
+from ndlike.jax_functions import jax_function_dispatch, jax_multiply
+
+
+@jax_function_dispatch("x")
+def jax_double(x: jax.Array) -> jax.Array:
+    return jax_multiply(x, 2)
+
+
+assert jnp.array_equal(jax_double(jnp.array([1, 2])), jnp.array([2, 4]))
+```
+
+### Pytrees and `jax_tree_map`
+
+`JaxLikeImplementation` provides dataclass-based pytree registration for
+`jax.jit`, `jax.vmap`, and `jax.grad`. `JaxAxisProtected` declares its
+protected fields automatically; general `JaxLikeImplementation` subclasses
+declare their dynamic fields explicitly:
+
+```python
+from typing import ClassVar
+
+from ndlike.jax_like import JaxLikeImplementation
+
+
+class MyJaxArray(JaxLikeImplementation["MyJaxArray"]):
+    pytree_children: ClassVar[tuple[str, ...]] = ("array",)
+```
+
+- `pytree_children` is inherited in order; extend it when a subclass adds
+  dynamic fields. Selection is purely structural and never depends on field
+  values or `None`.
+- Default pytree traversal requires JAX-backed dynamic fields and rejects NumPy
+  arrays (including nested ones) as well as array-valued static metadata,
+  preventing silent conversion or freezing. Mixed JAX/NumPy representations
+  remain usable eagerly, outside `jit`/`grad`/`vmap`.
+- Native `jax.tree.map` traverses registered pytrees into their raw fields,
+  bypassing wrapper operators and invariants. Use `jax_tree_map` when the mapped
+  function should receive whole custom objects:
+
+```python
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any, ClassVar
+
+import jax
+import jax.numpy as jnp
+
+from ndlike.jax_functions import jax_multiply
 from ndlike.jax_like import jax_tree_map
+from ndlike.protected_axis.jax import JaxAxisProtected
 
-# x is a JaxLikeImplementation with multiplication support.
+
+@dataclass(frozen=True)
+class Scaleable(JaxAxisProtected["Scaleable", "Scaleable | float"]):
+    array: jax.Array
+    protected_axes: ClassVar[dict[str, int]] = {"array": 1}
+    permitted_functions: ClassVar[set[Callable[..., Any]]] = {jax_multiply}
+
+
+x = Scaleable(jnp.ones((2, 3)))
 mapped = jax_tree_map(lambda value: value * 2, {"values": x})
+assert isinstance(mapped["values"], Scaleable)
 ```
 
-`JaxLikeImplementation` is opaque to this helper by default. A class can set
-`tree_map_traverse: ClassVar[bool] = True` to request structural traversal.
+`JaxLikeImplementation` is opaque to `jax_tree_map` by default; set
+`tree_map_traverse: ClassVar[bool] = True` on a class to opt into structural
+traversal instead.
+
+## Array Protocols, Base Classes & Conversions
+
+Unlike `numpy.typing.ArrayLike` (which only checks convertibility to an array),
+`ndlike`'s protocols describe objects that *behave* like arrays—indexing, shape,
+and metadata—without requiring the full numerical Array API:
+
+- `WeakArrayLike` (`ndlike.array_like`): the minimal interface shared by NumPy,
+  JAX, and PyTorch (omitting the integer `size` property, since Torch uses a
+  `.size()` method).
+- `ArrayLike` (`ndlike.array_like`): extends `WeakArrayLike` with `size`,
+  `__array_namespace__`, and `to_device`.
+- `NumpyLike`, `TorchLike`, `JaxLike`: backend-specific protocols adding
+  operators and backend methods.
+
+| Backend | Module | Protocol | Implementation base | Conversion helper | Conversion hook |
+| --- | --- | --- | --- | --- | --- |
+| NumPy | `ndlike.array_like` | `NumpyLike` | `NumpyLikeImplementation` | `to_numpy_like` | `__array_like__` |
+| PyTorch | `ndlike.torch_like` | `TorchLike` | `TorchLikeImplementation` | `to_torch_like` | `__torch_like__` |
+| JAX | `ndlike.jax_like` | `JaxLike` | `JaxLikeImplementation` | `to_jax_like` | `__jax_like__` |
+
+Each module also exports a matching `*Convertible` protocol
+(`NumpyLikeConvertible`, `TorchLikeConvertible`, `JaxLikeConvertible`).
+Subclassing an `*Implementation` base gives you convenience methods and
+operator mixins while you supply representation metadata and backend dispatch
+(`__array_function__`/`__array_ufunc__` for NumPy, `__torch_function__` for
+Torch, `__jax_function__` for JAX).
+
+Use the `to_*_like` helpers to accept either custom array-likes or plain data
+while keeping custom structure intact:
+
+```python
+import numpy as np
+
+from ndlike.array_like import to_numpy_like
+from ndlike.jax_like import to_jax_like
+from ndlike.tuple.jax import JaxBroadcastTuple
+from ndlike.tuple.numpy import NumpyBroadcastTuple
+
+raw = to_numpy_like([1, 2, 3])            # falls back to np.asanyarray
+assert isinstance(raw, np.ndarray)
+
+parts = NumpyBroadcastTuple((np.ones((2, 1)), np.arange(3)))
+assert to_numpy_like(parts) is parts      # structure preserved via __array_like__
+
+jax_parts = to_jax_like(parts)            # converts members via __jax_like__
+assert isinstance(jax_parts, JaxBroadcastTuple)
+assert jax_parts.shape == (2, 3)
+assert jax_parts.members[0].shape == (2, 1)
+```
+
+When an input satisfies the matching `*Convertible` protocol (the core array
+interface *plus* the conversion hook, not the hook alone), `to_*_like` calls
+its hook so custom types preserve their structure instead of collapsing into raw
+arrays. Otherwise it falls back to `numpy.asanyarray`, `torch.as_tensor`, or
+`jax.numpy.asarray`. NumPy uses `__array_like__` for consistency with
+`__array__`.
+
+### Generic type parameters
+
+The array protocols, `*Implementation` bases, and `*AxisProtected` bases share
+seven positional type parameters (trailing defaults may be omitted):
+
+| Position | Parameter | Default | Contract |
+| --- | --- | --- | --- |
+| 1 | `OwnerT` | Broad corresponding protocol | Owner type (copies return `OwnerT`) |
+| 2 | `OpValueT` | `OwnerT` | Accepted operation operands |
+| 3 | `OpResultT` | `OwnerT` | Arithmetic and reduction results |
+| 4 | `SetValueT` | `Never` | Assignment / `.at` values in addition to `Self` |
+| 5 | `ShapeResultT` | `OwnerT` | Shape, indexing, and iteration-element results |
+| 6 | `CompResultT` | Backend boolean array type (`WeakArrayLike` for neutral protocols) | Comparison results |
+| 7 | `SetResultT` | `OwnerT` | Functional update (`.at`) results |
+
+Common patterns:
+
+```python
+# Native array contracts
+type NativeNumpy = NumpyLike[np.ndarray]
+type NativeJax = JaxLike[jax.Array]
+type NativeTorch = TorchLike[torch.Tensor]
+
+# Custom type accepting scalars in arithmetic while preserving its own type
+class Vector(JaxAxisProtected["Vector", "Vector | float"]): ...
+
+# Also accepting floats for __setitem__ / .at updates (4th slot)
+class MutableVector(JaxAxisProtected["MutableVector", "MutableVector", "MutableVector", float]): ...
+
+# Extensible generic base forwarding its owner to concrete subclasses
+class BaseVector[T: "BaseVector"](JaxLikeImplementation[T]): ...
+class ConcreteVector(BaseVector["ConcreteVector"]): ...
+```
+
+- Explicit result arguments replace the default rather than unioning with
+  `OwnerT`.
+- In JAX, `.at[index].get()` returns `ShapeResultT`, while `.at[index].set(...)`
+  and arithmetic update methods accept `Self | SetValueT` and return `SetResultT`
+  (exposed via the final protocols `JaxIndexUpdateHelper[ValueT, ResultT, ShapeResultT = ResultT]`
+  and `JaxIndexUpdateRef[ValueT, ResultT, ShapeResultT = ResultT]`).
+- Conversion protocols (`*Convertible`) take only a single `SetValueT` parameter.
 
 ## Development
 
-```bash
+```sh
 uv sync --all-extras
+uv run ruff check
+uv run ty check
 uv run pytest
-uv run prek install
-uv run prek run --all-files
-uv build
 ```
 
-Dependency groups follow flextype: `lint` contains Ruff and ty, `test` contains
-pytest, and `dev` includes both groups plus prek. Development Torch wheels use
-the CPU index on Linux and Windows. Type checking requires both backend extras.
+Pre-commit hooks are managed with `prek`:
+
+```sh
+uv run prek install
+uv run prek run --all-files
+```
 
 `scripts/check_backend_naming.py` enforces backend prefixes on definitions
-(BKN001) and restricts runtime Torch/JAX imports to their respective
-backend-prefixed modules (BKN002). Type-only imports are exempt. Intentional
-exceptions use an explicit `# noqa: BKN001` or `# noqa: BKN002` on the opening line.
+(`BKN001`) and restricts runtime Torch/JAX imports to backend-prefixed modules
+(`BKN002`); use `# noqa: BKN001` or `# noqa: BKN002` for intentional
+exceptions.
+
+## License
+
+This project is licensed under the MIT License.

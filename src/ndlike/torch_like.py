@@ -148,6 +148,12 @@ class TorchLikeImplementation[
     define ``__eq__``. Hashing follows the ordinary dataclass rules.
     """
 
+    if TYPE_CHECKING:
+
+        def _ndlike_shape_result(self) -> ShapeResultT:
+            """Expose the declared shape result for structural type inference."""
+            ...
+
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Preserve inherited equality before a subclass's dataclass decorator runs."""
         super().__init_subclass__(**kwargs)
@@ -321,18 +327,53 @@ class TorchLikeImplementation[
 
     def clone(self, *, memory_format: torch.memory_format = torch.preserve_format) -> OwnerT:
         """Return a copy of the array."""
-        return cast("OwnerT", torch.clone(self, memory_format=memory_format))  # ty: ignore[invalid-argument-type]
+        return torch.clone(self, memory_format=memory_format)  # ty: ignore[invalid-argument-type, invalid-explicit-return]
 
     def transpose(self, dim0: int, dim1: int) -> ShapeResultT:
         """Return a transposed version of the array."""
-        return cast("ShapeResultT", torch.transpose(self, dim0, dim1))  # ty: ignore[invalid-argument-type]
+        return torch.transpose(self, dim0, dim1)  # ty: ignore[invalid-argument-type, invalid-explicit-return]
 
     def permute(self, *dims: torch.Size | int | tuple[int] | list[int]) -> ShapeResultT:
         """Return a permuted version of the array."""
         if len(dims) == 1 and isinstance(dims[0], (tuple, list)):
             dims = dims[0]  # ty:ignore[invalid-assignment]
 
-        return cast("ShapeResultT", torch.permute(self, dims))  # ty: ignore[invalid-argument-type]
+        return torch.permute(self, dims)  # ty: ignore[invalid-argument-type, invalid-explicit-return]
+
+    def reshape(self, *shape: int | tuple[int, ...] | list[int]) -> ShapeResultT:
+        """Return a reshaped version of the array."""
+        target: object = shape[0] if len(shape) == 1 and isinstance(shape[0], (tuple, list)) else shape
+        return torch.reshape(self, target) # ty: ignore[invalid-argument-type, invalid-explicit-return]
+
+    def squeeze(self, dim: int | tuple[int, ...] | list[int] | None = None) -> ShapeResultT:
+        """Return the array with singleton dimensions removed."""
+        if dim is None:
+            return torch.squeeze(self) # ty: ignore[invalid-argument-type]
+        return torch.squeeze(self, dim=dim) # ty: ignore[no-matching-overload]
+
+    def unsqueeze(self, dim: int) -> ShapeResultT:
+        """Return the array with a singleton dimension inserted at ``dim``."""
+        return torch.unsqueeze(self, dim) # ty: ignore[invalid-argument-type, invalid-explicit-return]
+
+    @overload
+    def movedim(self, source: int, destination: int) -> ShapeResultT: ...
+
+    @overload
+    def movedim(self, source: Sequence[int], destination: Sequence[int]) -> ShapeResultT: ...
+
+    def movedim(self, source: int | Sequence[int], destination: int | Sequence[int]) -> ShapeResultT:
+        """Return the array with dimensions moved from ``source`` to ``destination``."""
+        return torch.movedim(self, source, destination)  # ty: ignore[no-matching-overload]
+
+    @overload
+    def broadcast_to(self, size: Sequence[int]) -> ShapeResultT: ...
+
+    @overload
+    def broadcast_to(self, dim: int, /, *dims: int) -> ShapeResultT: ...
+
+    def broadcast_to(self, *args: int | Sequence[int], **kwargs: Sequence[int]) -> ShapeResultT:
+        """Return the array broadcast to ``size``."""
+        return torch.broadcast_to(self, *_broadcast_to_args(args), **kwargs)  # ty: ignore[invalid-argument-type, invalid-explicit-return]
 
     @abstractmethod
     def __torch_function__(

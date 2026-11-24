@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, Self, cast
+from typing import TYPE_CHECKING, Any, Self
 
 import numpy as np
 
-from ndlike.array_like import NumpyLikeImplementation, to_numpy_like
+from ndlike.array_like import AnyNumpyLike, NumpyLikeImplementation, to_numpy_like
 from ndlike.tuple._common import BroadcastTuple, tuple_function
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from types import ModuleType
+    from typing import overload
 
     from numpy.typing import DTypeLike
 
-    from ndlike.array_like import AnyNumpyLike, ArrayFlagsLike
+    from ndlike.array_like import ArrayFlagsLike, ToIndices
+    from ndlike.tuple._common import PreservingMembers
 
 
 _MUTATING_FUNCTIONS = {
@@ -61,14 +63,17 @@ _EMPTY_ARRAY_FUNCTIONS = frozenset(
 )
 
 
-class NumpyBroadcastTuple[Members: tuple[AnyNumpyLike | np.ndarray | np.generic, ...]](
+type NumpyMember = AnyNumpyLike | np.ndarray | np.generic
+
+
+class NumpyBroadcastTuple[Members: tuple[NumpyMember, ...]](
     BroadcastTuple[Members],
     NumpyLikeImplementation[
         "NumpyBroadcastTuple[Members]",
         object,
         "NumpyBroadcastTuple[Members]",
         object,
-        "NumpyBroadcastTuple[Members]",
+        "NumpyBroadcastTuple[tuple[NumpyMember, ...]]",
         "NumpyBroadcastTuple[tuple[Any, ...]]",
     ],
 ):
@@ -85,7 +90,7 @@ class NumpyBroadcastTuple[Members: tuple[AnyNumpyLike | np.ndarray | np.generic,
         return self._map_members(lambda member: to_numpy_like(member, dtype=dtype, copy=copy))
 
     def __post_init__(self) -> None:
-        """Require native or dispatched members so shaping cannot coerce representations."""
+        """Require each member to be a native array or support backend dispatch."""
         super().__post_init__()
         for member in self.members:
             if not isinstance(member, (np.ndarray, np.generic)) and not callable(
@@ -95,8 +100,8 @@ class NumpyBroadcastTuple[Members: tuple[AnyNumpyLike | np.ndarray | np.generic,
                 raise TypeError(msg)
 
     @staticmethod
-    def _broadcast_member[V: AnyNumpyLike | np.ndarray | np.generic](member: V, shape: tuple[int, ...]) -> V:
-        return cast("V", np.broadcast_to(member, shape))
+    def _broadcast_member(member: NumpyMember, shape: tuple[int, ...]) -> NumpyMember:
+        return np.broadcast_to(member, shape)
 
     @staticmethod
     def _is_scalar_integer(value: object) -> bool:
@@ -164,15 +169,66 @@ class NumpyBroadcastTuple[Members: tuple[AnyNumpyLike | np.ndarray | np.generic,
             nout=1 if func in _EMPTY_ARRAY_FUNCTIONS else None,
         )
 
-    def reshape(self, *shape: int | Sequence[int], order: Literal["C", "F", "A"] = "C") -> Self:
-        """Reshape the common logical batch, preserving member representations."""
-        target = shape[0] if len(shape) == 1 and not isinstance(shape[0], int) else shape
-        return cast("Self", np.reshape((self), cast("Any", target), order=order))
+    if TYPE_CHECKING:
 
-    def squeeze(self, axis: int | tuple[int, ...] | None = None) -> Self:
-        """Remove singleton logical batch axes."""
-        return np.squeeze(cast("Any", self), axis=axis)
+        def _ndlike_tuple_owner(self) -> NumpyBroadcastTuple[Members]:
+            """Identify the container rebuilt by memberwise shaping."""
+            ...
 
-    def swapaxes(self, axis1: int, axis2: int, /) -> Self:
-        """Swap two logical batch axes."""
-        return cast("Self", np.swapaxes(cast("Any", self), axis1, axis2))
+        @overload
+        def __getitem__(self: PreservingMembers, index: ToIndices, /) -> NumpyBroadcastTuple[Members]: ...
+        @overload
+        def __getitem__(self, index: ToIndices, /) -> NumpyBroadcastTuple[tuple[NumpyMember, ...]]: ...
+        def __getitem__(self, index: ToIndices, /) -> NumpyBroadcastTuple[Any]:
+            """Index the logical batch."""
+            ...
+
+        @overload
+        def __iter__(self: PreservingMembers) -> Iterator[NumpyBroadcastTuple[Members]]: ...
+        @overload
+        def __iter__(self) -> Iterator[NumpyBroadcastTuple[tuple[NumpyMember, ...]]]: ...
+        def __iter__(self) -> Iterator[NumpyBroadcastTuple[Any]]:
+            """Iterate over the logical batch."""
+            ...
+
+        @overload
+        def reshape(
+            self: PreservingMembers, *shape: int | Sequence[int], order: str = "C", copy: bool | None = None
+        ) -> NumpyBroadcastTuple[Members]: ...
+        @overload
+        def reshape(
+            self, *shape: int | Sequence[int], order: str = "C", copy: bool | None = None
+        ) -> NumpyBroadcastTuple[tuple[NumpyMember, ...]]: ...
+        def reshape(
+            self, *shape: int | Sequence[int], order: str = "C", copy: bool | None = None
+        ) -> NumpyBroadcastTuple[Any]:
+            """Reshape the logical batch."""
+            ...
+
+        @overload
+        def transpose(self: PreservingMembers, *axes: int | Sequence[int] | None) -> NumpyBroadcastTuple[Members]: ...
+        @overload
+        def transpose(self, *axes: int | Sequence[int] | None) -> NumpyBroadcastTuple[tuple[NumpyMember, ...]]: ...
+        def transpose(self, *axes: int | Sequence[int] | None) -> NumpyBroadcastTuple[Any]:
+            """Transpose the logical batch axes."""
+            ...
+
+        @overload
+        def swapaxes(self: PreservingMembers, axis1: int, axis2: int, /) -> NumpyBroadcastTuple[Members]: ...
+        @overload
+        def swapaxes(self, axis1: int, axis2: int, /) -> NumpyBroadcastTuple[tuple[NumpyMember, ...]]: ...
+        def swapaxes(self, axis1: int, axis2: int, /) -> NumpyBroadcastTuple[Any]:
+            """Swap two logical axes."""
+            ...
+
+        @overload
+        def squeeze(
+            self: PreservingMembers, axis: int | tuple[int, ...] | None = None
+        ) -> NumpyBroadcastTuple[Members]: ...
+        @overload
+        def squeeze(
+            self, axis: int | tuple[int, ...] | None = None
+        ) -> NumpyBroadcastTuple[tuple[NumpyMember, ...]]: ...
+        def squeeze(self, axis: int | tuple[int, ...] | None = None) -> NumpyBroadcastTuple[Any]:
+            """Remove singleton logical axes."""
+            ...

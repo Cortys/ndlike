@@ -16,6 +16,7 @@ from ndlike._batch import is_basic_index, normalize_broadcast_index
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
     from types import ModuleType
+    from typing import Protocol
 
     import jax
     from jax.sharding import Sharding
@@ -27,6 +28,22 @@ if TYPE_CHECKING:
     from ndlike.tuple.jax import JaxBroadcastTuple
     from ndlike.tuple.numpy import NumpyBroadcastTuple
     from ndlike.tuple.torch import TorchBroadcastTuple
+
+    class ShapePreserving(Protocol):
+        """A member whose declared shape result is assignable to its own type."""
+
+        def _ndlike_shape_result(self) -> Self: ...
+
+    class PreservingMembers(Protocol):
+        """A broadcast tuple whose stored members all preserve their type."""
+
+        @property
+        def members(self) -> tuple[ShapePreserving | NestedPreservingTuple, ...]: ...
+
+    class NestedPreservingTuple(PreservingMembers, Protocol):
+        """Recognize a nested tuple with a compatible owner and preserving members."""
+
+        def _ndlike_tuple_owner(self) -> Self: ...
 
 
 @dataclass(frozen=True, eq=False, slots=True, weakref_slot=True)
@@ -135,7 +152,7 @@ class BroadcastTuple[Members: tuple[Any, ...]](metaclass=ABCMeta):
 
     @staticmethod
     @abstractmethod
-    def _broadcast_member[V](member: V, shape: tuple[int, ...]) -> V:
+    def _broadcast_member(member: Any, shape: tuple[int, ...]) -> Any:  # noqa: ANN401
         """Dispatch a broadcast to a member's own representation."""
 
     @staticmethod
@@ -143,7 +160,7 @@ class BroadcastTuple[Members: tuple[Any, ...]](metaclass=ABCMeta):
     def _is_scalar_integer(value: object) -> bool:
         """Recognize backend scalar integer indices without reading their value."""
 
-    def _expanded_members(self) -> Members:
+    def _expanded_members(self) -> tuple[Any, ...]:
         shape = self.shape
         return _rebuild_sequence(
             type(self.members),
@@ -153,7 +170,7 @@ class BroadcastTuple[Members: tuple[Any, ...]](metaclass=ABCMeta):
             ),
         )
 
-    def __getitem__(self, index: ToIndices, /) -> Self:
+    def __getitem__(self, index: ToIndices, /) -> BroadcastTuple[Any]:
         """Index the logical batch while retaining compact basic-index storage."""
         if not self.members:
             return self.with_members(self.members)
@@ -193,7 +210,7 @@ class BroadcastTuple[Members: tuple[Any, ...]](metaclass=ABCMeta):
             raise TypeError(msg)
         return self.shape[0]
 
-    def __iter__(self) -> Iterator[Self]:
+    def __iter__(self) -> Iterator[BroadcastTuple[Any]]:
         """Iterate over the logical batch, retaining all members in each result."""
         for index in range(len(self)):
             yield self[index]

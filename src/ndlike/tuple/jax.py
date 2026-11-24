@@ -3,25 +3,36 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, overload
 
 import jax
 from jax import numpy as jnp
 import numpy as np
 
 from ndlike import jax_functions as jf
-from ndlike.jax_like import JaxLikeImplementation, _jax_validate_dynamic_field, to_jax_like
+from ndlike.jax_like import AnyJaxLike, JaxLikeImplementation, _jax_validate_dynamic_field, to_jax_like
 from ndlike.tuple._common import BroadcastTuple, _rebuild_sequence, tuple_function
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator, Sequence
     from types import ModuleType
+    from typing import Protocol
 
     from jax.sharding import Sharding
-    from jax.typing import DTypeLike
+    from jax.typing import ArrayLike as JTArrayLike, DTypeLike
 
     from ndlike.array_like import ToIndices
-    from ndlike.jax_like import AnyJaxLike
+    from ndlike.jax_like import JaxLike
+    from ndlike.tuple._common import NestedPreservingTuple, PreservingMembers, ShapePreserving
+
+    # The bound also makes these members valid JaxBroadcastTuple inputs.
+    class _JaxPreservingLeaf(JaxLike[Any, Any, Any, Any, Any, Any, Any], ShapePreserving, Protocol):
+        """A JAX-like member that preserves its representation under shaping."""
+
+    class _JaxPreservingTuple(JaxLike[Any, Any, Any, Any, Any, Any, Any], NestedPreservingTuple, Protocol):
+        """A nested JAX tuple whose member types survive shaping."""
+
+    type JaxShapePreservingMember = _JaxPreservingLeaf | _JaxPreservingTuple
 
 
 # Known array results only; populated tuples still forward arbitrary functions.
@@ -77,14 +88,17 @@ _EMPTY_OUTPUTS.update(
 )
 
 
-class JaxBroadcastTuple[Members: tuple[AnyJaxLike | jax.Array, ...]](
+type JaxMember = AnyJaxLike | jax.Array
+
+
+class JaxBroadcastTuple[Members: tuple[JaxMember, ...]](
     BroadcastTuple[Members],
     JaxLikeImplementation[
         "JaxBroadcastTuple[Members]",
         object,
         "JaxBroadcastTuple[Members]",
         object,
-        "JaxBroadcastTuple[Members]",
+        "JaxBroadcastTuple[tuple[JaxMember, ...]]",
         "JaxBroadcastTuple[tuple[Any, ...]]",
     ],
 ):
@@ -129,7 +143,7 @@ class JaxBroadcastTuple[Members: tuple[AnyJaxLike | jax.Array, ...]](
         return self._map_members(lambda member: to_jax_like(member, dtype, device=device, copy=copy))
 
     def __post_init__(self) -> None:
-        """Require native or dispatched members so shaping cannot coerce representations."""
+        """Require each member to be a native array or support backend dispatch."""
         super().__post_init__()
         for member in self.members:
             if not isinstance(member, jax.Array) and not callable(getattr(type(member), "__jax_function__", None)):
@@ -137,12 +151,17 @@ class JaxBroadcastTuple[Members: tuple[AnyJaxLike | jax.Array, ...]](
                 raise TypeError(msg)
 
     @staticmethod
-    def _broadcast_member[V: AnyJaxLike | jax.Array](member: V, shape: tuple[int, ...]) -> V:
-        return cast("V", jf.jax_broadcast_to(member, shape))
+    def _broadcast_member(member: JaxMember, shape: tuple[int, ...]) -> JaxMember:
+        return jf.jax_broadcast_to(member, shape)
 
     @staticmethod
     def _is_scalar_integer(value: object) -> bool:
         return isinstance(value, (jax.Array, np.ndarray)) and value.ndim == 0 and np.issubdtype(value.dtype, np.integer)
+
+    @property
+    def weak_type(self) -> bool | None:
+        """First member's weak typing flag, or None if unavailable or empty."""
+        return getattr(self.members[0], "weak_type", None) if self.members else None
 
     @property
     def sharding(self) -> Any:  # noqa: ANN401
@@ -171,9 +190,95 @@ class JaxBroadcastTuple[Members: tuple[AnyJaxLike | jax.Array, ...]](
     def _map_array_fields(self, op: Callable[[Any], Any]) -> Self:
         return self._map_members(op)
 
-    def swapaxes(self, axis1: int, axis2: int) -> Self:
-        """Swap two logical batch axes."""
-        return cast("Self", jf.jax_swapaxes(self, axis1, axis2))
+    @overload
+    def take_along_axis(
+        self: PreservingMembers, indices: JTArrayLike, axis: int | None = -1
+    ) -> JaxBroadcastTuple[Members]: ...
+
+    @overload
+    def take_along_axis(
+        self, indices: JTArrayLike | JaxBroadcastTuple[Any], axis: int | None = -1
+    ) -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...
+
+    def take_along_axis(
+        self, indices: JTArrayLike | JaxBroadcastTuple[Any], axis: int | None = -1
+    ) -> JaxBroadcastTuple[Any]:
+        """Gather values along a logical batch axis."""
+        return jf.jax_take_along_axis(self, indices, axis)
+
+    if TYPE_CHECKING:
+
+        def _ndlike_tuple_owner(self) -> JaxBroadcastTuple[Members]:
+            """Identify the container rebuilt by memberwise shaping."""
+            ...
+
+        @overload
+        def __getitem__[M: tuple[JaxShapePreservingMember, ...]](
+            self: JaxBroadcastTuple[M], index: ToIndices, /
+        ) -> JaxBroadcastTuple[M]: ...
+        @overload
+        def __getitem__(self, index: ToIndices, /) -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...
+        def __getitem__(self, index: ToIndices, /) -> JaxBroadcastTuple[Any]:
+            """Index the logical batch."""
+            ...
+
+        @overload
+        def __iter__(self: PreservingMembers) -> Iterator[JaxBroadcastTuple[Members]]: ...
+        @overload
+        def __iter__(self) -> Iterator[JaxBroadcastTuple[tuple[JaxMember, ...]]]: ...
+        def __iter__(self) -> Iterator[JaxBroadcastTuple[Any]]:
+            """Iterate over the logical batch."""
+            ...
+
+        @overload
+        def reshape(
+            self: PreservingMembers, *args: int | Sequence[int], order: str = "C"
+        ) -> JaxBroadcastTuple[Members]: ...
+        @overload
+        def reshape(self, *args: int | Sequence[int], order: str = "C") -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...
+        def reshape(self, *args: int | Sequence[int], order: str = "C") -> JaxBroadcastTuple[Any]:
+            """Reshape the logical batch."""
+            ...
+
+        @overload
+        def transpose(self: PreservingMembers, *args: int | Sequence[int] | None) -> JaxBroadcastTuple[Members]: ...
+        @overload
+        def transpose(self, *args: int | Sequence[int] | None) -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...
+        def transpose(self, *args: int | Sequence[int] | None) -> JaxBroadcastTuple[Any]:
+            """Transpose the logical batch axes."""
+            ...
+
+        @overload
+        def swapaxes(self: PreservingMembers, axis1: int, axis2: int) -> JaxBroadcastTuple[Members]: ...
+        @overload
+        def swapaxes(self, axis1: int, axis2: int) -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...
+        def swapaxes(self, axis1: int, axis2: int) -> JaxBroadcastTuple[Any]:
+            """Swap two logical axes."""
+            ...
+
+        @overload
+        def squeeze(self: PreservingMembers, axis: int | Sequence[int] | None = None) -> JaxBroadcastTuple[Members]: ...
+        @overload
+        def squeeze(self, axis: int | Sequence[int] | None = None) -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...
+        def squeeze(self, axis: int | Sequence[int] | None = None) -> JaxBroadcastTuple[Any]:
+            """Remove singleton logical axes."""
+            ...
+
+        @overload
+        def ravel(self: PreservingMembers, order: str = "C") -> JaxBroadcastTuple[Members]: ...
+        @overload
+        def ravel(self, order: str = "C") -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...
+        def ravel(self, order: str = "C") -> JaxBroadcastTuple[Any]:
+            """Flatten the logical batch."""
+            ...
+
+        @overload
+        def flatten(self: PreservingMembers, order: str = "C") -> JaxBroadcastTuple[Members]: ...
+        @overload
+        def flatten(self, order: str = "C") -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...
+        def flatten(self, order: str = "C") -> JaxBroadcastTuple[Any]:
+            """Flatten the logical batch."""
+            ...
 
     @classmethod
     def __jax_function__(
@@ -216,7 +321,15 @@ class JaxTupleIndexUpdateRef[T: JaxBroadcastTuple[Any]]:
     owner: T
     index: ToIndices
 
-    def get(self, **kwargs: Any) -> T:  # noqa: ANN401
+    @overload
+    def get[M: tuple[JaxShapePreservingMember, ...]](
+        self: JaxTupleIndexUpdateRef[JaxBroadcastTuple[M]],
+        **kwargs: Any,  # noqa: ANN401
+    ) -> JaxBroadcastTuple[M]: ...
+    @overload
+    def get(self, **kwargs: Any) -> JaxBroadcastTuple[tuple[JaxMember, ...]]: ...  # noqa: ANN401
+
+    def get(self, **kwargs: Any) -> JaxBroadcastTuple[Any]:
         """Read compactly by default, or delegate native get options when supplied."""
         if not kwargs:
             return self.owner[self.index]

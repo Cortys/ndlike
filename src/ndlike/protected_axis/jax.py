@@ -13,7 +13,6 @@ import numpy as np
 
 from ndlike._batch import is_basic_index, normalize_broadcast_index as _normalize_broadcast_index
 from ndlike.jax_functions import (
-    jax_reshape,
     jax_swapaxes,
     jax_take_along_axis,
 )
@@ -30,7 +29,7 @@ from ndlike.protected_axis._common import (
 from ndlike.protected_axis.jax_functions import _broadcast_batch, jax_function
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping, Sequence
+    from collections.abc import Callable, Iterator, Mapping
     from types import ModuleType
 
     from jax.sharding import Sharding
@@ -214,6 +213,11 @@ class JaxAxisProtected[
     @property
     def dtype(self) -> jnp.dtype:
         return self._jax_protected_value().dtype
+
+    @property
+    def weak_type(self) -> bool | None:
+        """Weak typing flag of the same protected value as ``dtype``, if available."""
+        return getattr(self._jax_protected_value(), "weak_type", None)
 
     @override
     @property
@@ -477,20 +481,9 @@ class JaxAxisProtected[
         del func, operands
         return values
 
-    @override
-    def reshape(self, *args: int | Sequence[int], order: str = "C") -> ShapeResultT:
-        """Return a copy with reshaped protected values."""
-        shape = cast("Sequence[int]", args[0] if len(args) == 1 and not isinstance(args[0], int) else args)
-
-        return jax_reshape(self, tuple(shape), order=order)
-
     def take_along_axis(self, indices: jax.Array, axis: int = -1) -> ShapeResultT:
         """Return a copy with gathered protected values along a batch dimension."""
         return jax_take_along_axis(self, indices, axis)
-
-    def swapaxes(self, axis1: int, axis2: int) -> ShapeResultT:
-        """Return a copy with two batch axes swapped."""
-        return jax_swapaxes(self, axis1, axis2)
 
 
 @dataclass(frozen=True, slots=True)

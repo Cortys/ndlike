@@ -99,8 +99,21 @@ class JaxOperatorsMixin[OpValueT = Any, OpResultT = Any, CompResultT = jax.Array
     __rlshift__ = cast("Callable[[Any, OpValueT], OpResultT]", _binary(jf.jax_left_shift, reflected=True))
     __rshift__ = cast("Callable[[Any, OpValueT], OpResultT]", _binary(jf.jax_right_shift))
     __rrshift__ = cast("Callable[[Any, OpValueT], OpResultT]", _binary(jf.jax_right_shift, reflected=True))
-    __eq__ = cast("Callable[[Any, OpValueT], CompResultT]", _binary(jf.jax_equal))
-    __ne__ = cast("Callable[[Any, OpValueT], CompResultT]", _binary(jf.jax_not_equal))
+
+    # The assigned native callables bind self when read through an instance.
+    if TYPE_CHECKING:
+
+        def __eq__(self, other: OpValueT, /) -> CompResultT:  # ty: ignore[incompatible-method-override]
+            """Compare array values for equality."""
+            ...
+
+        def __ne__(self, other: OpValueT, /) -> CompResultT:  # ty: ignore[incompatible-method-override]
+            """Compare array values for inequality."""
+            ...
+    else:
+        __eq__ = _binary(jf.jax_equal)
+        __ne__ = _binary(jf.jax_not_equal)
+
     __lt__ = cast("Callable[[Any, OpValueT], CompResultT]", _binary(jf.jax_less))
     __le__ = cast("Callable[[Any, OpValueT], CompResultT]", _binary(jf.jax_less_equal))
     __gt__ = cast("Callable[[Any, OpValueT], CompResultT]", _binary(jf.jax_greater))

@@ -14,11 +14,20 @@ import jax.numpy as jnp
 
 from ndlike import jax_functions as jf
 from ndlike.protected_axis.jax import JaxAxisProtected
-from ndlike.tuple.jax import JaxBroadcastTuple
+from ndlike.tuple.jax import JaxBroadcastTuple, JaxMember
 
 
 def example() -> JaxBroadcastTuple[tuple[jax.Array, ...]]:
     return JaxBroadcastTuple((jnp.arange(2.0).reshape(2, 1), jnp.arange(3.0), jnp.array(7.0)))
+
+
+def test_weak_type_follows_the_first_member() -> None:
+    weak = jnp.asarray(2)
+    strong = jnp.asarray(2, dtype=weak.dtype)
+
+    assert JaxBroadcastTuple((weak, strong)).weak_type is True
+    assert JaxBroadcastTuple((strong, weak)).weak_type is False
+    assert JaxBroadcastTuple(()).weak_type is None
 
 
 def test_named_members_remain_dynamic_through_jit():
@@ -27,7 +36,7 @@ def test_named_members_remain_dynamic_through_jit():
         second: jax.Array
 
     x = JaxBroadcastTuple(Pair(jnp.arange(2.0).reshape(2, 1), jnp.arange(3.0)))
-    assert_type(x.reshape(6).members, Pair)
+    assert_type(x.reshape(6).members, tuple[JaxMember, ...])
     leaves, structure = jax.tree.flatten(x)
     assert len(leaves) == 2
     assert type(jax.tree.unflatten(structure, leaves).members) is Pair
@@ -39,8 +48,8 @@ def test_named_members_remain_dynamic_through_jit():
 
 def test_tree_round_trip_and_shape_typing():
     x = example()
-    assert_type(x.reshape(6), JaxBroadcastTuple[tuple[jax.Array, ...]])
-    assert_type(x[0], JaxBroadcastTuple[tuple[jax.Array, ...]])
+    assert_type(x.reshape(6), JaxBroadcastTuple[tuple[JaxMember, ...]])
+    assert_type(x[0], JaxBroadcastTuple[tuple[JaxMember, ...]])
     leaves, structure = jax.tree.flatten(x)
     assert len(leaves) == 3
     assert all(a is b for a, b in zip(leaves, x.members, strict=True))
@@ -96,7 +105,7 @@ def test_transforms_of_callable_protected_members():
     assert_type(x.members, tuple[Game, jax.Array])
     assert_type(x.members[0], Game)
     assert_type(x.members[1], jax.Array)
-    assert_type(x.reshape(6).members[0], Game)
+    assert_type(x.reshape(6).members[0], JaxMember)
     y = jax.jit(lambda value: value.reshape(6))(x)
     assert type(y.members[0]) is Game
     assert y.members[0].array.shape == (6, 4)

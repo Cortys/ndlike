@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("torch")
 import torch
 
-from ndlike.tuple.torch import TorchBroadcastTuple
+from ndlike.tuple.torch import TorchBroadcastTuple, TorchMember
 
 
 def test_gradients_and_detach():
@@ -17,9 +17,14 @@ def test_gradients_and_detach():
     b = torch.ones(3, requires_grad=True)
     c = torch.ones((), requires_grad=True)
     x = TorchBroadcastTuple((a, b, c))
-    assert_type(x.reshape(6), TorchBroadcastTuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor]])
-    assert_type(x[0], TorchBroadcastTuple[tuple[torch.Tensor, torch.Tensor, torch.Tensor]])
-    torch.stack([member.sum() for member in x.reshape(6).members]).sum().backward()
+    reshaped = x.reshape(6)
+    assert_type(reshaped, TorchBroadcastTuple[tuple[TorchMember, ...]])
+    assert_type(x[0], TorchBroadcastTuple[tuple[TorchMember, ...]])
+    sums = []
+    for member in reshaped.members:
+        assert isinstance(member, torch.Tensor)
+        sums.append(member.sum())
+    torch.stack(sums).sum().backward()
     torch.testing.assert_close(a.grad, torch.full((2, 1), 3.0))
     torch.testing.assert_close(b.grad, torch.full((3,), 2.0))
     torch.testing.assert_close(c.grad, torch.tensor(6.0))

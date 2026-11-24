@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import operator
 from typing import TYPE_CHECKING, Any, cast
 
 from flextype import switchdispatch
@@ -156,7 +157,11 @@ def protected_copy_function(
             raise TypeError(msg)
         return func(next(iter(internals.values.values())), order=order, subok=subok)
 
-    return _apply_unary(internals, lambda _name, value, _axes: func(value, order=order, subok=subok))
+    return _apply_unary(
+        internals,
+        lambda _name, value, _axes: func(value, order=order, subok=subok),
+        structural=True,
+    )
 
 
 @numpy_function.register(np.astype)
@@ -372,7 +377,8 @@ def protected_reshape_function(
             kwargs["copy"] = copy
         return func(value, target_shape, **kwargs)
 
-    return _apply_shape_only(internals, op)
+    structural = isinstance(order, str) and order.upper() in ("C", "F")
+    return _apply_shape_only(internals, op, structural=structural)
 
 
 @numpy_function.register(np.expand_dims)
@@ -507,7 +513,7 @@ def protected_concatenate_function(
     out = kwargs.get("out", args[2] if len(args) > 2 else None)
 
     out_internals = numpy_axis_protected_internals(out, broadcast=False)
-    sequence = _extract_protected_value_sequence_internals(values, None)
+    sequence = _extract_protected_value_sequence_internals(values, func)
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
         return NotImplemented
@@ -569,7 +575,7 @@ def protected_stack_function(
     out = params.arguments.get("out", None)
 
     out_internals = numpy_axis_protected_internals(out, broadcast=False)
-    sequence = _extract_protected_value_sequence_internals(values, None)
+    sequence = _extract_protected_value_sequence_internals(values, func)
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
         return NotImplemented
@@ -970,3 +976,43 @@ def protected_broadcast_to_function(
     del func
     shape = tuple(params.arguments["shape"])
     return _apply_shape_only(internals, lambda _name, value, axes: _broadcast_batch(value, axes, shape))
+
+
+@numpy_function.register(np.take_along_axis)
+@numpy_internals_override("arr")
+def protected_take_along_axis_function(
+    func: Callable,
+    params: BoundArguments,
+    internals: NumpyAxisProtectedInternals,
+) -> Any:  # noqa: ANN401
+    """Gather protected entries along a logical batch axis."""
+    indices = params.arguments["indices"]
+    axis = params.arguments.get("axis", -1)
+
+    if isinstance(indices, _AxisProtectedBase) or _has_custom_array_function(indices):
+        return NotImplemented
+    if axis is not None:
+        axis = operator.index(axis)
+    indices_array = np.asanyarray(indices)
+    batch_ndim = 1 if axis is None else internals.batch_ndim
+    if indices_array.ndim != batch_ndim:
+        msg = "take_along_axis indices must have the same ndim as the protected object's batch dimensions."
+        raise ValueError(msg)
+
+    results: dict[str, NumpyProtectedValue] = {}
+    for name, axes_count in internals.protected_axes.items():
+        value = internals.values[name]
+        if axis is None:
+            value = np.reshape(value, flattened_batch_shape(value_shape(value), axes_count))
+            mapped_axis = 0
+        else:
+            mapped_axis = normalize_axis(axis, value_ndim(value) - axes_count)
+
+        field_index = indices_array
+        if axes_count > 0:
+            target_shape = (*indices_array.shape, *protected_shape(value_shape(value), axes_count))
+            field_index = np.broadcast_to(expand_for_protected_axes(indices_array, axes_count), target_shape)
+
+        results[name] = func(value, field_index, axis=mapped_axis)
+
+    return internals.rebuild_structural(results)

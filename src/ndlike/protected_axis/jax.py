@@ -20,8 +20,10 @@ from ndlike.jax_like import AnyJaxLike, JaxLike, JaxLikeImplementation
 from ndlike.protected_axis._common import (
     _AxisProtectedBase,
     batch_shape,
+    numpy_index_field,
     primary_protected_name,
     protected_shape,
+    rebuild_structural,
     require_effective_fields,
     value_ndim,
     value_shape,
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
     from types import ModuleType
 
     from jax.sharding import Sharding
+    from jax.typing import DTypeLike as JaxDTypeLike
     from numpy.typing import DTypeLike, NDArray
 
     from ndlike.array_like import ToIndices
@@ -104,6 +107,14 @@ class JaxAxisProtected[
     operations also reuse single-entry fields when an unmarked field carries the
     result shape; all-broadcasted layouts expand fields for these operations.
     Pytrees expose stored values: native vmap maps physical child axes, not logical broadcasts.
+
+    Plain dataclass subclasses rebuild structurally without invoking ``__init__``
+    or ``__post_init__`` on synchronized single-object batch rearrangements
+    (indexing, ``.at[index].get()``, supported shape operations, ``copy``, and
+    ``jax_take_along_axis`` with ``mode="clip"``), except when transforming an
+    empty logical batch into a nonempty one or when the instance dictionary contains
+    undeclared attributes. Set ``revalidate_on_batch_change = True`` to route
+    those operations through :meth:`with_protected_values` instead.
     """
 
     protected_axes: ClassVar[dict[str, int]] = {}
@@ -157,6 +168,9 @@ class JaxAxisProtected[
         """Transform operational fields and let initialization rebuild derived state."""
         if len(self._effective_protected_axes) == len(type(self).protected_axes):
             return super()._map_array_fields(op)
+        return self._map_and_replace_array_fields(op)
+
+    def _map_and_replace_array_fields(self, op: Callable[[Any], Any]) -> Self:
         updates = {}
         for name in type(self)._array_field_names():  # noqa: SLF001
             value = getattr(self, name)
@@ -192,6 +206,18 @@ class JaxAxisProtected[
     ) -> OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT:
         """Return a copy with updated protected field values."""
         return replace(self, **values)  # ty:ignore[invalid-argument-type]
+
+    _default_with_protected_values = with_protected_values
+
+    @override
+    def view(self, dtype: JaxDTypeLike | None = None, type: None = None) -> Self:
+        """Bit-cast the selected array fields, validating the new representation."""
+        if type is not None:
+            msg = "The type argument of view() is not supported by JAX."
+            raise NotImplementedError(msg)
+        if getattr(self._map_array_fields, "__func__", None) is not JaxAxisProtected._map_array_fields:
+            return super().view(dtype)
+        return self._map_and_replace_array_fields(lambda value: value.view(dtype))
 
     @override
     def __len__(self) -> int:
@@ -322,7 +348,7 @@ class JaxAxisProtected[
                 else:
                     value = _broadcast_batch(value, axes, primary_batch)
             full_index = self._index_with_protected_axes(field_index, axes)
-            result = value[full_index]
+            result = numpy_index_field(value, full_index, axes) if isinstance(value, np.ndarray) else value[full_index]
 
             if axes == 0 and not hasattr(result, "ndim"):
                 result = np.asarray(result, dtype=value.dtype) if isinstance(value, np.ndarray) else jnp.array(result)
@@ -338,7 +364,12 @@ class JaxAxisProtected[
 
             indexed[name] = result
 
-        return cast("ShapeResultT", self.with_protected_values(indexed))
+        return cast(
+            "ShapeResultT",
+            rebuild_structural(
+                self, indexed, primary_batch, self._effective_protected_axes, type(self).broadcasted_batch
+            ),
+        )
 
     def _scatter_protected_values(
         self,

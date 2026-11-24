@@ -254,7 +254,11 @@ def protected_clone_function(
         return NotImplemented
 
     memory_format = kwargs.get("memory_format", torch.preserve_format)
-    return _apply_unary(internals, lambda _name, value, _axes: func(value, memory_format=memory_format))
+    return _apply_unary(
+        internals,
+        lambda _name, value, _axes: func(value, memory_format=memory_format),
+        structural=True,
+    )
 
 
 @torch_function.multi_register([torch.zeros_like, torch.ones_like, torch.full_like])
@@ -644,7 +648,7 @@ def protected_cat_function(
     out = mutable_kwargs.get("out")
 
     out_internals = torch_axis_protected_internals(out, broadcast=False)
-    sequence = _extract_protected_value_sequence_internals(values)
+    sequence = _extract_protected_value_sequence_internals(values, func)
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
         return NotImplemented
@@ -735,7 +739,7 @@ def protected_gather_function(
     if out is not None:
         return out
 
-    return internals.create(results)
+    return internals.rebuild_structural(results)
 
 
 @torch_function.register(torch.stack)
@@ -753,7 +757,7 @@ def protected_stack_function(
     out = mutable_kwargs.get("out")
 
     out_internals = torch_axis_protected_internals(out, broadcast=False)
-    sequence = _extract_protected_value_sequence_internals(values)
+    sequence = _extract_protected_value_sequence_internals(values, func)
     template = sequence.template if sequence.template is not None else out_internals
     if template is None:
         return NotImplemented

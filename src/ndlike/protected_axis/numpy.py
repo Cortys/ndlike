@@ -25,8 +25,10 @@ from ndlike.protected_axis._common import (
     batch_shape,
     normalize_axes,
     normalize_axis,
+    numpy_index_field,
     primary_protected_name,
     protected_shape,
+    rebuild_structural,
     require_effective_fields,
     value_ndim,
     value_shape,
@@ -71,7 +73,16 @@ class NumpyAxisProtected[
     NumpyLikeImplementation[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
     ABC,
 ):
-    """ABC for representations with one or multiple protected array-like fields."""
+    """ABC for representations with one or multiple protected array-like fields.
+
+    Plain dataclass subclasses rebuild structurally without invoking ``__init__``
+    or ``__post_init__`` on synchronized single-object batch rearrangements
+    (indexing, supported shape operations except ``reshape(..., order="A")``,
+    ``copy``, and ``np.take_along_axis``), except when transforming an empty
+    logical batch into a nonempty one or when the instance dictionary contains undeclared
+    attributes. Set ``revalidate_on_batch_change = True`` to route those operations
+    through :meth:`with_protected_values` instead.
+    """
 
     protected_axes: ClassVar[dict[str, int]] = {}
     permitted_ufuncs: ClassVar[dict[np.ufunc, list[str]]] = {}
@@ -129,6 +140,8 @@ class NumpyAxisProtected[
             return None
         return self._postprocess_protected_values(super().protected_values(), func)
 
+    _default_protected_values = protected_values
+
     def protected_value(self) -> NumpyProtectedValue:
         """Return the primary protected value."""
         return getattr(self, type(self).primary_protected_name)
@@ -153,6 +166,8 @@ class NumpyAxisProtected[
     ) -> OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT:
         """Return a copy with updated protected field values."""
         return replace(self, **values)  # ty:ignore[invalid-argument-type]
+
+    _default_with_protected_values = with_protected_values
 
     @override
     def astype(
@@ -286,7 +301,7 @@ class NumpyAxisProtected[
                 else:
                     value = _broadcast_batch(value, axes, logical_shape)
             full_index = self._index_with_protected_axes(field_index, axes)
-            result = value[full_index]
+            result = numpy_index_field(value, full_index, axes) if isinstance(value, np.ndarray) else value[full_index]
 
             if axes == 0 and not hasattr(result, "ndim"):
                 result = np.asarray(result)
@@ -302,7 +317,12 @@ class NumpyAxisProtected[
 
             indexed[name] = result
 
-        return cast("ShapeResultT", self.with_protected_values(indexed))
+        return cast(
+            "ShapeResultT",
+            rebuild_structural(
+                self, indexed, logical_shape, self._effective_protected_axes, type(self).broadcasted_batch
+            ),
+        )
 
     @override
     def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:

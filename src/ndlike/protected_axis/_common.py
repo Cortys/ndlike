@@ -26,8 +26,17 @@ class EffectiveProtectedAxes:
     def __get__(self, instance: object, owner: type) -> dict[str, int]:
         del instance
         cls = cast("Any", owner)
-        excluded = {field.name for field in fields(cls) if not field.init} if is_dataclass(cls) else set()
-        axes = {name: count for name, count in cls.protected_axes.items() if name not in excluded}
+        axes = dict(cls.protected_axes)
+        structural_names = None
+        if is_dataclass(cls):
+            declared = fields(cls)
+            init_names = {field.name for field in declared if field.init}
+            if axes and axes.keys() <= init_names and cls.__new__ is object.__new__:
+                structural_names = frozenset(field.name for field in declared)
+            for field in declared:
+                if not field.init:
+                    axes.pop(field.name, None)
+        cls._structural_field_names = structural_names
         cls._effective_protected_axes = axes
         return axes
 
@@ -38,12 +47,21 @@ class _AxisProtectedBase[V, R](metaclass=ABCMeta):
     Instances and custom readers must supply fields with sufficient protected
     rank and compatible batch shapes. Only all-broadcast layouts need to inspect
     every field's shape to determine the logical shape.
+
+    Plain dataclass subclasses rebuild structurally without invoking ``__init__``
+    or ``__post_init__`` on synchronized single-object logical batch rearrangements
+    unless transforming an empty logical batch into a nonempty one, storing
+    undeclared attributes in the instance dictionary, overriding ``__new__`` / ``protected_values``
+    / ``with_protected_values``, or setting ``revalidate_on_batch_change = True``.
     """
 
     protected_axes: ClassVar[dict[str, int]]
     broadcasted_batch: ClassVar[set[str]] = set()
     permitted_functions: ClassVar[set[Callable[..., Any]]]
+    revalidate_on_batch_change: ClassVar[bool] = False
     _effective_protected_axes: ClassVar[EffectiveProtectedAxes] = EffectiveProtectedAxes()
+    _structural_field_names: ClassVar[frozenset[str] | None] = None
+    _default_with_protected_values: ClassVar[object] = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -51,11 +69,44 @@ class _AxisProtectedBase[V, R](metaclass=ABCMeta):
         cls.broadcasted_batch = inherit_broadcasted_batch(cls)
         # Each subclass resolves its own layout after decorators have completed.
         cls._effective_protected_axes = EffectiveProtectedAxes()
+        cls._structural_field_names = None
 
     @abstractmethod
     def with_protected_values(self, values: dict[str, V], func: Callable | None) -> R:
         """Reconstruct a value in the backend's representation family."""
         ...
+
+    def _with_protected_values_structural(self, values: dict[str, V], func: Callable | None = None) -> R:
+        """Rebuild a plain dataclass structurally on synchronized batch rearrangements.
+
+        Copy declared fields by name, preserving non-protected metadata by reference.
+        Subclasses that rely on custom attribute storage should set
+        ``revalidate_on_batch_change = True`` to use ordinary construction.
+        """
+        cls = type(self)
+        axes = self._effective_protected_axes
+        names = cls._structural_field_names
+        if (
+            names is None
+            or cls.revalidate_on_batch_change
+            or cls.with_protected_values is not cls._default_with_protected_values
+            or cls.protected_values is not cls._default_protected_values
+            or values.keys() != axes.keys()
+            or not vars(self).keys() <= names
+        ):
+            return self.with_protected_values(values, func)
+
+        obj = object.__new__(cls)
+        for name in names:
+            if name in values:
+                value = values[name]
+            else:
+                try:
+                    value = object.__getattribute__(self, name)
+                except AttributeError:
+                    continue  # An init=False field can legitimately be unset.
+            object.__setattr__(obj, name, value)
+        return cast("R", obj)
 
     def validate(self) -> None:
         """Raise if effective fields have insufficient rank or incompatible batches.
@@ -87,6 +138,8 @@ class _AxisProtectedBase[V, R](metaclass=ABCMeta):
             return None
         values = {name: getattr(self, name) for name in self._effective_protected_axes}
         return values if func is None else self._postprocess_protected_values(values, func)
+
+    _default_protected_values: ClassVar[object] = protected_values
 
     def _protected_batch_shape(self, values: Mapping[str, V] | None = None) -> tuple[int, ...]:
         """Read one shape, reusing supplied values when all fields broadcast."""
@@ -172,21 +225,67 @@ class AxisProtectedCreator[V, R](Protocol):
         ...
 
 
+def _logical_batch_is_empty(
+    values: Mapping[str, object],
+    protected_axes: Mapping[str, int],
+    broadcasted_batch: set[str] | frozenset[str],
+) -> bool:
+    """Return whether the static logical batch shape implied by ``values`` is empty."""
+    for name, count in protected_axes.items():
+        if name not in broadcasted_batch:
+            return 0 in batch_shape(value_shape(values[name]), count)
+    return any(0 in batch_shape(value_shape(values[name]), count) for name, count in protected_axes.items())
+
+
+def rebuild_structural[V, R](
+    obj: _AxisProtectedBase[V, R],
+    values: dict[str, V],
+    source_batch_shape: tuple[int, ...],
+    protected_axes: Mapping[str, int],
+    broadcasted_batch: set[str] | frozenset[str],
+    func: Callable | None = None,
+) -> R:
+    """Rebuild structurally unless transforming an empty logical batch into a nonempty one."""
+    if 0 in source_batch_shape and not _logical_batch_is_empty(values, protected_axes, broadcasted_batch):
+        return obj.with_protected_values(values, func)
+    return obj._with_protected_values_structural(values, func)  # noqa: SLF001
+
+
 @dataclass(frozen=True, slots=True)
 class AxisProtectedInternals[V, R]:
     """Internal representation for one protected-axis object."""
 
-    create: AxisProtectedCreator[V, R]
+    owner: _AxisProtectedBase[V, R]
     values: dict[str, V]
     protected_axes: dict[str, int]
-    owner_type: type[Any]
     batch_shape: tuple[int, ...]
     broadcasted_batch: frozenset[str] = frozenset()
+    func: Callable | None = None
+
+    @property
+    def owner_type(self) -> type[Any]:
+        """Return the concrete type of the extracted owner."""
+        return type(self.owner)
 
     @property
     def batch_ndim(self) -> int:
         """Return the logical number of batch dimensions."""
         return len(self.batch_shape)
+
+    def create(self, values: dict[str, V]) -> R:
+        """Reconstruct via ordinary ``with_protected_values``."""
+        return self.owner.with_protected_values(values, self.func)
+
+    def rebuild_structural(self, values: dict[str, V]) -> R:
+        """Rebuild structurally unless transforming an empty logical batch into a nonempty one."""
+        return rebuild_structural(
+            self.owner,
+            values,
+            self.batch_shape,
+            self.protected_axes,
+            self.broadcasted_batch,
+            self.func,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,18 +331,14 @@ def extract_axis_protected_internals[V, R](
     if values is None:
         return None
     shape = obj._protected_batch_shape(values if context is None else None)  # noqa: SLF001
-
-    def create(values: dict[str, V]) -> R:
-        return obj.with_protected_values(values, func)
-
     broadcasted_batch = frozenset(getattr(obj, "broadcasted_batch", ())).intersection(protected_axes)
     return AxisProtectedInternals(
-        create=create,
+        owner=obj,
         values=dict(values),
         protected_axes=dict(protected_axes),
-        owner_type=type(obj),
-        broadcasted_batch=broadcasted_batch,
         batch_shape=shape,
+        broadcasted_batch=broadcasted_batch,
+        func=func,
     )
 
 
@@ -289,10 +384,15 @@ def validate_batch_sync(
     return expected
 
 
-def apply_unary[V, R](internals: AxisProtectedInternals[V, R], op: Callable[[str, V, int], V]) -> R:
+def apply_unary[V, R](
+    internals: AxisProtectedInternals[V, R],
+    op: Callable[[str, V, int], V],
+    *,
+    structural: bool = False,
+) -> R:
     """Transform protected fields and rebuild, trusting the operation's layout."""
     results = {name: op(name, value, internals.protected_axes[name]) for name, value in internals.values.items()}
-    return internals.create(results)
+    return internals.rebuild_structural(results) if structural else internals.create(results)
 
 
 def prepare_broadcasted_batch[V, R](
@@ -322,7 +422,12 @@ def prepare_broadcasted_batch[V, R](
     return replace(internals, values=values)
 
 
-def apply_shape_only[V, R](internals: AxisProtectedInternals[V, R], op: Callable[[str, V, int], V]) -> R:
+def apply_shape_only[V, R](
+    internals: AxisProtectedInternals[V, R],
+    op: Callable[[str, V, int], V],
+    *,
+    structural: bool = True,
+) -> R:
     """Transform batches while retaining normalized singleton broadcast fields."""
 
     def field_op(name: str, value: V, axes: int) -> V:
@@ -335,7 +440,7 @@ def apply_shape_only[V, R](internals: AxisProtectedInternals[V, R], op: Callable
             return value
         return op(name, value, axes)
 
-    return apply_unary(internals, field_op)
+    return apply_unary(internals, field_op, structural=structural)
 
 
 def extract_protected_value_sequence_internals[V, R](
@@ -496,6 +601,19 @@ def internals_override[V, R](
         return function_override(wrapper)
 
     return decorator
+
+
+def numpy_index_field(value: np.ndarray, index: tuple[Any, ...], axes: int) -> Any:  # noqa: ANN401
+    """Index a NumPy field while preserving the dtype and contents of scalar cells."""
+    if axes == 0 and value.dtype.kind == "O":
+        # A scalar index unboxes the Python object, which can itself look like a batch.
+        # Retain a temporary trailing axis until NumPy has completed the selection.
+        return value[..., None][(*index, slice(None))].squeeze(axis=-1)
+    result = value[index]
+    if axes == 0 and getattr(result, "dtype", None) != value.dtype:
+        # NumPy scalars can lose information such as byte order or fixed string width.
+        return np.asarray(result, dtype=value.dtype)
+    return result
 
 
 def value_ndim(value: object) -> int:

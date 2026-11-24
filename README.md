@@ -163,6 +163,21 @@ assert uv.reshape(6).shape == (6,)    # init=False field rebuilt on construction
   from operational transforms—operations transform only independent fields and
   reconstruct the subclass through normal dataclass initialization.
 
+### Batch rearrangements and validation
+
+When indexing, reshaping, transposing, broadcasting, or copying a plain
+protected-axis dataclass, ndlike builds a new instance from its declared fields.
+It stores the rearranged protected values and carries over non-protected fields by
+reference, including `init=False` metadata. This works with frozen dataclasses and
+`@dataclass(slots=True)` and skips `__init__` and `__post_init__`.
+
+Set `revalidate_on_batch_change: ClassVar[bool] = True` if your constructor
+checks batch-wide invariants or your class relies on hand-written slots, a custom
+`__dict__`, or descriptors for field storage. This routes batch rearrangements
+through `with_protected_values`. Extra attributes in an ordinary instance dictionary
+already trigger that fallback. Operations that can introduce values or combine
+objects, such as arithmetic and stacking, use ordinary construction when rebuilding.
+
 ### PyTorch and JAX backends
 
 Use `TorchAxisProtected` (`ndlike.protected_axis.torch`) and `JaxAxisProtected`

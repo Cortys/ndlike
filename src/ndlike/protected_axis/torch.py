@@ -14,8 +14,10 @@ from ndlike._batch import is_basic_index, normalize_broadcast_index
 from ndlike.protected_axis._common import (
     _AxisProtectedBase,
     batch_shape,
+    numpy_index_field,
     primary_protected_name,
     protected_shape,
+    rebuild_structural,
     require_effective_fields,
     value_ndim,
     value_shape,
@@ -53,7 +55,16 @@ class TorchAxisProtected[
     TorchLikeImplementation[OwnerT, OpValueT, OpResultT, SetValueT, ShapeResultT, CompResultT, SetResultT],
     ABC,
 ):
-    """ABC for representations with protected torch-like fields and optional NumPy sidecars."""
+    """ABC for representations with protected torch-like fields and optional NumPy sidecars.
+
+    Plain dataclass subclasses rebuild structurally without invoking ``__init__``
+    or ``__post_init__`` on synchronized single-object batch rearrangements
+    (indexing, supported shape operations, ``clone``, and ``torch.gather`` when
+    creating a new result), except when transforming an empty logical batch into
+    a nonempty one or when the instance dictionary contains undeclared attributes. Set
+    ``revalidate_on_batch_change = True`` to route those operations through
+    :meth:`with_protected_values` instead.
+    """
 
     protected_axes: ClassVar[dict[str, int]] = {}
     permitted_functions: ClassVar[set[Callable[..., Any]]] = set()
@@ -107,6 +118,8 @@ class TorchAxisProtected[
     ) -> OwnerT | OpResultT | ShapeResultT | CompResultT | SetResultT:
         """Return a copy with updated protected field values."""
         return replace(self, **values)  # ty:ignore[invalid-argument-type]
+
+    _default_with_protected_values = with_protected_values
 
     @override
     def __len__(self) -> int:
@@ -235,7 +248,7 @@ class TorchAxisProtected[
                 else:
                     value = _broadcast_batch(value, axes, logical_shape)
             full_index = self._index_with_protected_axes(field_index, axes)
-            result = value[full_index]
+            result = numpy_index_field(value, full_index, axes) if isinstance(value, np.ndarray) else value[full_index]
 
             if axes == 0 and not hasattr(result, "ndim"):
                 result = (
@@ -253,7 +266,12 @@ class TorchAxisProtected[
 
             indexed[name] = result
 
-        return cast("ShapeResultT", self.with_protected_values(indexed))
+        return cast(
+            "ShapeResultT",
+            rebuild_structural(
+                self, indexed, logical_shape, self._effective_protected_axes, type(self).broadcasted_batch
+            ),
+        )
 
     @override
     def __setitem__(self, index: ToIndices, value: Self | SetValueT, /) -> None:

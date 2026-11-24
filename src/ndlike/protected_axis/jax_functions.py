@@ -204,7 +204,7 @@ def protected_copy_function(
         return NotImplemented
 
     order = params.arguments.get("order", "C")
-    return _apply_unary(internals, lambda _name, value, _axes: func(value, order=order))
+    return _apply_unary(internals, lambda _name, value, _axes: func(value, order=order), structural=True)
 
 
 @jax_function.register(jax_astype)
@@ -410,7 +410,8 @@ def protected_reshape_function(
             lambda field_value: np.reshape(field_value, target_shape, order=order, copy=copy),
         )
 
-    return _apply_unary(internals, op)
+    structural = isinstance(order, str) and order.upper() in ("C", "F")
+    return _apply_unary(internals, op, structural=structural)
 
 
 @jax_function.register(jax_broadcast_to)
@@ -583,7 +584,7 @@ def protected_concatenate_function(
     axis = params.arguments["axis"]
     dtype = params.arguments["dtype"]
 
-    sequence = _extract_protected_value_sequence_internals(values, None)
+    sequence = _extract_protected_value_sequence_internals(values, func)
     template = sequence.template if sequence.template is not None else None
     if template is None:
         return NotImplemented
@@ -641,7 +642,7 @@ def protected_stack_function(
     axis = params.arguments["axis"]
     dtype = params.arguments["dtype"]
 
-    sequence = _extract_protected_value_sequence_internals(values, None)
+    sequence = _extract_protected_value_sequence_internals(values, func)
     template = sequence.template if sequence.template is not None else None
     if template is None:
         return NotImplemented
@@ -694,6 +695,8 @@ def protected_take_along_axis_function(
         msg = "take_along_axis indices must have the same ndim as the protected object's batch dimensions."
         raise ValueError(msg)
 
+    is_clip_mode = mode == "clip" or mode is jax.lax.GatherScatterMode.CLIP
+
     results: dict[str, JaxProtectedValue] = {}
     for name, axes_count in internals.protected_axes.items():
         value = internals.values[name]
@@ -712,7 +715,7 @@ def protected_take_along_axis_function(
 
         results[name] = func(value, field_index, mapped_axis, mode=mode, fill_value=fill_value)
 
-    return internals.create(results)
+    return internals.rebuild_structural(results) if is_clip_mode else internals.create(results)
 
 
 def _extract_where_condition(condition: object) -> tuple[object, tuple[int, ...]] | None:
